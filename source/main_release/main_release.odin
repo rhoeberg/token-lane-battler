@@ -11,6 +11,7 @@ import "core:mem"
 import game ".."
 
 _ :: mem
+_ :: log
 
 USE_TRACKING_ALLOCATOR :: #config(USE_TRACKING_ALLOCATOR, false)
 
@@ -25,23 +26,23 @@ main :: proc() {
 		mode = os.S_IRUSR | os.S_IWUSR | os.S_IRGRP | os.S_IROTH
 	}
 
-	logh, logh_err := os.open("log.txt", (os.O_CREATE | os.O_TRUNC | os.O_RDWR), mode)
+	/* logh, logh_err := os.open("log.txt", (os.O_CREATE | os.O_TRUNC | os.O_RDWR), mode) */
 
-	if logh_err == os.ERROR_NONE {
-		os.stdout = logh
-		os.stderr = logh
-	}
+	/* if logh_err == os.ERROR_NONE { */
+	/* 	os.stdout = logh */
+	/* 	os.stderr = logh */
+	/* } */
 
-	logger_alloc := context.allocator
-	logger := logh_err == os.ERROR_NONE ? log.create_file_logger(logh, allocator = logger_alloc) : log.create_console_logger(allocator = logger_alloc)
-	context.logger = logger
+	/* logger_alloc := context.allocator */
+	/* logger := logh_err == os.ERROR_NONE ? log.create_file_logger(logh, allocator = logger_alloc) : log.create_console_logger(allocator = logger_alloc) */
+	/* context.logger = logger */
 
-	when USE_TRACKING_ALLOCATOR {
-		default_allocator := context.allocator
-		tracking_allocator: mem.Tracking_Allocator
-		mem.tracking_allocator_init(&tracking_allocator, default_allocator)
-		context.allocator = mem.tracking_allocator(&tracking_allocator)
-	}
+	/* when USE_TRACKING_ALLOCATOR { */
+	/* 	default_allocator := context.allocator */
+	/* 	tracking_allocator: mem.Tracking_Allocator */
+	/* 	mem.tracking_allocator_init(&tracking_allocator, default_allocator) */
+	/* 	context.allocator = mem.tracking_allocator(&tracking_allocator) */
+	/* } */
 
 	game.game_init_window()
 	game.game_init()
@@ -62,9 +63,9 @@ main :: proc() {
 		mem.tracking_allocator_destroy(&tracking_allocator)
 	}
 
-	if logh_err == os.ERROR_NONE {
-		log.destroy_file_logger(logger, logger_alloc)
-	}
+	/* if logh_err == os.ERROR_NONE { */
+	/* 	log.destroy_file_logger(logger, logger_alloc) */
+	/* } */
 }
 
 // make game use good GPU on laptops etc

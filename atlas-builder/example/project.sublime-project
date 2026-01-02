@@ -1,0 +1,38 @@
+{
+	"folders":
+	[
+		{
+			"path": ".",
+		},
+		{
+			"path": "..",
+		},
+	],
+	"build_systems":
+	[
+		{
+			"file_regex": "^(.+)\\(([0-9]+):([0-9]+)\\) (.+)$",
+			"name": "Atlas builder example",
+			"working_dir": "$project_path",
+			"windows": {
+				"shell_cmd": "run.bat",
+			},
+			"osx": {
+				"shell_cmd": "sh run.sh",
+			},
+			"linux": {
+				"shell_cmd": "sh run.sh",
+			},
+		}
+	],
+	"settings":
+	{
+		"LSP":
+		{
+			"odin":
+			{
+				"enabled": true,
+			},
+		},
+	},
+}
