@@ -1,7 +1,4 @@
 /*
-thoughts:
-instead of the current reading order of execution (left to right row by row)
-we could have an initiative system
 */
 
 package game
@@ -13,12 +10,14 @@ import rl "vendor:raylib"
 
 _ :: fmt
 
-BOARD_COLUMNS :: 5
-BOARD_ROWS :: 5
+BOARD_COLUMNS :: 6
+BOARD_ROWS :: 2
 BOARD_TILE_SIZE :: 64
 PLAYER_HAND_Y_START :: 400
 PLAYER_HAND_X_START :: 0
 PLAYER_MAX_HAND_SIZE :: 5
+
+PLAYER_ROW_OFFSET_Y :: BOARD_ROWS * BOARD_TILE_SIZE
 
 Rect :: rl.Rectangle
 Vec2 :: rl.Vector2
@@ -57,14 +56,16 @@ Archer_Moving :: struct {
 Swordsman_Moving :: struct {
 }
 
-Init_State :: struct {
-}
+Init_State :: struct {}
+
+Done :: struct {}
 
 Token_State :: union {
 	Init_State,
 	Archer_Shooting,
 	Archer_Moving,
 	Swordsman_Moving,
+	Done,
 }
 
 Token_Direction :: enum {
@@ -135,7 +136,8 @@ MAX_ACTIVE_VFX :: 12
 Game_Memory :: struct {
 	run: bool,
 	atlas_texture: rl.Texture,
-	board: [BOARD_COLUMNS][BOARD_ROWS]Board_Token,
+	enemy_rows: [BOARD_COLUMNS][BOARD_ROWS]Board_Token,
+	player_rows: [BOARD_COLUMNS][BOARD_ROWS]Board_Token,
 	player: Player_State,
 	round_state: Game_Round_State,
 
@@ -168,7 +170,7 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 }
 
 // get board token from given position
-get_token_from_board_pos :: proc(pos: Board_Pos) -> (^Board_Token, bool) {
+get_token_from_board_pos :: proc(pos: Board_Pos, alliance: Alliance) -> (^Board_Token, bool) {
 
 	// bounds check 
 	if pos.x > BOARD_COLUMNS-1 || pos.y > BOARD_ROWS-1 || pos.x < 0 || pos.y < 0 {
@@ -181,8 +183,13 @@ get_token_from_board_pos :: proc(pos: Board_Pos) -> (^Board_Token, bool) {
 	// we should probably store the tokens in a seperate array and use an
 	// index offset for the handle
 	// this way we can mutate the tokens and they will be correct everywhere
-	token := &g.board[pos.x][pos.y]
-	return token, true
+	if alliance == .Player {
+		token := &g.player_rows[pos.x][pos.y]
+		return token, true
+	} else {
+		token := &g.enemy_rows[pos.x][pos.y]
+		return token, true
+	}
 }
 
 // get the next position given a board position
@@ -217,6 +224,38 @@ increment_board_position :: proc(pos: Board_Pos) -> Board_Pos {
 
 	return next_pos
 }
+decrement_board_position :: proc(pos: Board_Pos) -> Board_Pos {
+	next_pos := pos
+	if next_pos.x > 0 {
+		next_pos.x -= 1
+	} else {
+		next_pos.y -= 1
+		next_pos.x = BOARD_COLUMNS-1
+	} 
+
+	return next_pos
+}
+
+get_board_pos_screen_pos :: proc(pos: Board_Pos, alliance: Alliance) -> Vec2 {
+	result: Vec2
+		/* result.x = f32(pos.x * BOARD_TILE_SIZE) */
+		/* result.y = f32(pos.y * BOARD_TILE_SIZE) + PLAYER_ROW_OFFSET_Y */
+
+	switch alliance {
+	case .Player:
+		result.x = f32(pos.x * BOARD_TILE_SIZE)
+		result.y = f32(pos.y * BOARD_TILE_SIZE) + PLAYER_ROW_OFFSET_Y
+	case .Enemy:
+		/* pos_x := (BOARD_COLUMNS-1) - pos.x */
+		/* pos_y := (BOARD_ROWS-1) - pos.y */
+		/* result.x = f32(pos_x * BOARD_TILE_SIZE) */
+		/* result.y = f32(pos_y * BOARD_TILE_SIZE) */
+		result.x = f32(pos.x * BOARD_TILE_SIZE)
+		result.y = f32(pos.y * BOARD_TILE_SIZE)
+	}
+
+	return result
+}
 
 
 // searches for next token which is:
@@ -228,7 +267,7 @@ find_next_token :: proc(start: Board_Pos, alliance: Alliance) -> (Board_Pos, boo
 	for {
 		token: ^Board_Token
 		token_pos_ok: bool
-		if token, token_pos_ok = get_token_from_board_pos(next_pos); !token_pos_ok {
+		if token, token_pos_ok = get_token_from_board_pos(next_pos, alliance); !token_pos_ok {
 			// token not valid (outside of bounds)
 			return {}, false
 		}
@@ -280,7 +319,7 @@ update :: proc() {
 					for y in 0..<BOARD_ROWS {
 						rect: Rect
 						rect.x = f32(x) * BOARD_TILE_SIZE
-						rect.y = f32(y) * BOARD_TILE_SIZE
+						rect.y = f32(y) * BOARD_TILE_SIZE + PLAYER_ROW_OFFSET_Y
 						rect.width = BOARD_TILE_SIZE
 						rect.height = BOARD_TILE_SIZE
 						if rl.CheckCollisionPointRec(mouse, rect) {
@@ -295,7 +334,7 @@ update :: proc() {
 				if found_valid_board_position {
 					// valid board position
 					// drop token here
-					g.board[valid_board_position.x][valid_board_position.y] = sa.get(g.player.current_hand, g.player.dragged_token_id)
+					g.player_rows[valid_board_position.x][valid_board_position.y] = sa.get(g.player.current_hand, g.player.dragged_token_id)
 					sa.ordered_remove(&g.player.current_hand, g.player.dragged_token_id)
 				}
 
@@ -322,104 +361,59 @@ update :: proc() {
 			// TODO (rhoe) here we reset all tokens to not finished so they can run their actions again
 			for x in 0..<BOARD_COLUMNS {
 				for y in 0..<BOARD_ROWS {
-					if token, token_valid := get_token_from_board_pos({x, y}); token_valid {
+					if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid {
 						token.finished_action = false
+						token.state = Init_State{}
 					}
 				}
 			}
 			
 
 			doing_actions: Doing_Actions_State
-			/* doing_actions.current_board_pos = {0, 0} */
-			/* doing_actions.start = rl.GetTime() */
-			/* g.round_state = doing_actions */
-
-			/* if token, token_ok := get_token_from_board_pos(doing_actions.current_board_pos); token_ok { */
-			/* 	token.state = Init_State{} */
-			/* } */
-
-			found_next_token: bool
-			doing_actions.current_board_pos, found_next_token = find_next_token({0, 0}, .Player)
-			if found_next_token {
-				token, _ := get_token_from_board_pos(doing_actions.current_board_pos)
-				token.state = Init_State{}
-				doing_actions.start = rl.GetTime()
-				g.round_state = doing_actions
-			}
+			doing_actions.start = rl.GetTime()
+			doing_actions.current_board_pos = {0, 0}
+			g.round_state = doing_actions
 		}
 	case Doing_Actions_State:
 
-		/*
-1. call do_board_pos_action with current position
-  if it returns false continue
-  if it returns true the action is done and we move on to the next one
-
-the action (for example update archer) is responsible for "declaring" when its done
-
-maybe we want to have a bit of pause before and after an action begins to make the flow more uniform. This way the flow would be:
-1. pause before action
-2. action duration
-3. pause after action
-*/
-		if do_board_pos_action(state.current_board_pos, state.start) {
-			found_next_token := false
-			state.current_board_pos, found_next_token = find_next_token(increment_board_position(state.current_board_pos), .Player)
-			if !found_next_token {
-
-				// INITIALIZE ENEMY ACTIONS STATE
-				if enemy_pos, found_enemy :=  find_next_token({0, 0}, .Enemy); found_enemy {
-					enemy_actions_state := Doing_Enemy_Actions_State{}
-					enemy_actions_state.current_board_pos = enemy_pos
-					token, _ := get_token_from_board_pos(enemy_actions_state.current_board_pos)
-					token.state = Init_State{}
-					enemy_actions_state.start = rl.GetTime()
-					g.round_state = enemy_actions_state
-				}
-				break
-			}
-
-			token, _ := get_token_from_board_pos(state.current_board_pos)
-			token.state = Init_State{}
-
-			state.start = rl.GetTime()
+		// get token board pos
+		token_pos, pos_ok := find_next_token(state.current_board_pos, .Player)
+		if !pos_ok {
+			g.round_state = Doing_Enemy_Actions_State{}
+			break
 		}
+
+		// get token pointer
+		current_token, token_ok := get_token_from_board_pos(token_pos, .Player)
+		if !token_ok || current_token.finished_action {
+			state.current_board_pos = increment_board_position(state.current_board_pos)
+			break
+		}
+
+		// do action
+		do_token_action(current_token, token_pos, state.start)
 
 	case Doing_Enemy_Actions_State:
-		if do_board_pos_action(state.current_board_pos, state.start) {
-
-			fmt.println("finding next enemy action:", state.current_board_pos)
-			found_next_token := false
-			state.current_board_pos, found_next_token = find_next_token(increment_board_position(state.current_board_pos), .Enemy)
-			if !found_next_token {
-				fmt.println("finished doing enemy actions")
-				g.round_state = Playing_Tokens_State{}
-				break
-			}
-
-			token, _ := get_token_from_board_pos(state.current_board_pos)
-			token.state = Init_State{}
-
-			state.start = rl.GetTime()
-		}
+		g.round_state = Playing_Tokens_State{}
 	}
 
 	update_vfx()
 }
 
-// returns true if action is done
+/* get_token_counter_pos :: proc(pos: Board_Pos) -> Board_Pos { */
+/* 	new_pos: Board_Pos */
+/* 	new_pos.x = BOARD_COLUMNS - pos.x - 1 */
+/* 	new_pos.y = BOARD_ROWS - pos.y */
+/* 	return new_pos */
+/* } */
+
+// returns returns false if token is done
 // TODO (rhoe) probably a bit of a confusion return var
-do_board_pos_action :: proc(pos: Board_Pos, start_time: f64) -> bool {
+do_token_action :: proc(token: ^Board_Token, pos: Board_Pos, start_time: f64) {
 
-	token, ok := get_token_from_board_pos(pos)
-	if !ok do return true
+	if token.finished_action do return
 
-	fmt.println("doing token action for:", pos, token)
-
-	if token.finished_action do return true
-
-	switch token.type {
-	case .None:
-		return true
+	#partial switch token.type {
 	case .Archer:
 		#partial switch variant in token.state {
 		case Init_State:
@@ -427,43 +421,25 @@ do_board_pos_action :: proc(pos: Board_Pos, start_time: f64) -> bool {
 			// handle initialization of archer action here
 			/* token.initialized = true */
 			found_target := false
-			enemy_pos: Board_Pos
+			/* target_pos: Board_Pos */
+			target_token: ^Board_Token
 
-			y := token.dir == .Up ? pos.y-1 : pos.y+1
-			move_dir := token.dir == .Up ? -1 : 1
+			opposite_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player
 
-			/* for y; y < BOARD_ROWS-1; y += move_dir { */
-			for {
-				if y < 0 || y > BOARD_ROWS-1 do break
-
-				// do thing
-				test_token := g.board[pos.x][y]
-				if test_token.alliance != token.alliance && test_token.type != .None {
-					fmt.println("found target:", test_token.alliance)
-					found_target = true
-					enemy_pos = {pos.x, y}
-					break
-				}
-
-				y += move_dir
+			target_pos := Board_Pos{pos.x, 1}
+			target_token, found_target = get_token_from_board_pos(target_pos, opposite_alliance)
+			if !found_target {
+				target_pos = Board_Pos{pos.x, 0}
+				target_token, found_target = get_token_from_board_pos(target_pos, opposite_alliance)
 			}
 
-			/* for y := pos.y-1; y >= 0; y -= 1 { */
-			/* 	test_token := g.board[pos.x][y] */
-			/* 	if test_token.alliance != .Player && test_token.type != .None { */
-			/* 		// found enemy */
-			/* 		found_enemy = true */
-			/* 		enemy_pos = {pos.x, y} */
-			/* 		break */
-			/* 	} */
-			/* } */
-
 			if found_target {
+				fmt.println("found target:", target_pos)
 				sa.clear(&g.active_vfx)
 				arrow: Arrow_VFX
 				arrow.t = 0
-				arrow.start = {f32(pos.x * BOARD_TILE_SIZE), f32(pos.y * BOARD_TILE_SIZE)} + {BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2
-				arrow.target = {f32(enemy_pos.x * BOARD_TILE_SIZE), f32((enemy_pos.y) * BOARD_TILE_SIZE)} + {BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2
+				arrow.start = get_board_pos_screen_pos(pos, token.alliance) + {BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2
+				arrow.target = get_board_pos_screen_pos(target_pos, opposite_alliance) + {BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2
 				vfx: VFX
 				vfx.done = false
 				vfx.start_time = rl.GetTime()
@@ -471,54 +447,41 @@ do_board_pos_action :: proc(pos: Board_Pos, start_time: f64) -> bool {
 				sa.append(&g.active_vfx, vfx)
 
 				shooting_state: Archer_Shooting
-				shooting_state.target = enemy_pos
+				shooting_state.target = target_pos
 				token.state = shooting_state
 			} else {
-				moving_state: Archer_Moving
-				moving_state.target = enemy_pos
-				token.state = moving_state
+				token.finished_action = true
 			}
-			
-			return false
 		case Archer_Shooting:
 			if sa.len(g.active_vfx) <= 0 {
 				token.finished_action = true
-				if target_token, target_token_ok := get_token_from_board_pos(variant.target); target_token_ok {
+				opposite_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player
+				if target_token, target_token_ok := get_token_from_board_pos(variant.target, opposite_alliance); target_token_ok {
 					target_token.type = .None
 				}
-				return true
+
+				token.finished_action = true
 			}
-			return false
-		case Archer_Moving:
-			// TODO (rhoe) set action to finished before moving token so it gets copied to the new place
-			token.finished_action = true
-			if pos.y > 0 && pos.y < BOARD_ROWS-1 {
-				token_copy := token^
-				move_dir := token.dir == .Up ? -1 : 1
-				g.board[pos.x][pos.y].type = .None
-				g.board[pos.x][pos.y + move_dir] = token_copy
-			}
-			return true
 		}
 	case .Swordsman:
-		/* SWORDSMAN_ACTION_DURATION :: 0.5 */
-		// TODO (rhoe) set action to finished before moving token so it gets copied to the new place
-		token.finished_action = true
-		if pos.y > 0 {
-			token_copy := token^
-			g.board[pos.x][pos.y].type = .None
+		/* /\* SWORDSMAN_ACTION_DURATION :: 0.5 *\/ */
+		/* // TODO (rhoe) set action to finished before moving token so it gets copied to the new place */
+		/* token.finished_action = true */
+		/* if pos.y > 0 { */
+		/* 	token_copy := token^ */
+		/* 	g.board[pos.x][pos.y].type = .None */
 
-			move_dir := token.dir == .Up ? -1 : 1
-			new_y := token.dir == .Up ? pos.y-1 : pos.y+1
-			if new_y < BOARD_ROWS-1 || new_y >= 0 {
-				g.board[pos.x][pos.y].type = .None
-				g.board[pos.x][pos.y + move_dir] = token_copy
-			}
-		}
-		return true
+		/* 	move_dir := token.dir == .Up ? -1 : 1 */
+		/* 	new_y := token.dir == .Up ? pos.y-1 : pos.y+1 */
+		/* 	if new_y < BOARD_ROWS-1 || new_y >= 0 { */
+		/* 		g.board[pos.x][pos.y].type = .None */
+		/* 		g.board[pos.x][pos.y + move_dir] = token_copy */
+		/* 	} */
+		/* } */
+		/* return true */
 	}
 
-	return false
+	/* return false */
 }
 
 update_vfx :: proc() {
@@ -542,6 +505,7 @@ update_vfx :: proc() {
 	}
 }
 
+
 draw_vfx :: proc() {
 	for fx in sa.slice(&g.active_vfx) {
 		switch sub in fx.subtype {
@@ -563,26 +527,57 @@ draw :: proc() {
 	////////////
 	// DRAW BOARD OUTLINE
 	for x in 0..<BOARD_COLUMNS {
-		for y in 0..<BOARD_ROWS {
+		for y in 0..<BOARD_ROWS*2 {
 			x_pos := x * BOARD_TILE_SIZE
+			/* y_pos := y * BOARD_TILE_SIZE + PLAYER_ROW_OFFSET_Y */
 			y_pos := y * BOARD_TILE_SIZE
 			rl.DrawRectangleLines(i32(x_pos), i32(y_pos), BOARD_TILE_SIZE, BOARD_TILE_SIZE, rl.BLACK)
 		}
 	}
 
 	////////////
-	// DRAW BOARD TOKENS
+	// DRAW PLAYER BOARD TOKENS
 	for x in 0..<BOARD_COLUMNS {
 		for y in 0..<BOARD_ROWS {
-			board_token := g.board[x][y]
-			if board_token.type == .None do continue
+			board_token := g.player_rows[x][y]
 
+			rect: Rect
+			rect.x = f32(x) * BOARD_TILE_SIZE
+			rect.y = f32(y) * BOARD_TILE_SIZE + f32(PLAYER_ROW_OFFSET_Y)
+			rect.width = BOARD_TILE_SIZE
+			rect.height = BOARD_TILE_SIZE
+			if board_token.type != .None {
+				rl.DrawTexturePro(g.atlas_texture, atlas_textures[board_token.texture_name].rect, rect, {}, 0, rl.WHITE)
+			}
+
+			rl.DrawText(rl.TextFormat("(%d, %d)", x, y), i32(rect.x), i32(rect.y), 14, rl.GREEN)
+		}
+	}
+
+	////////////
+	// DRAW ENEMY BOARD TOKENS
+	for x in 0..<BOARD_COLUMNS {
+		for y in 0..<BOARD_ROWS {
+
+			// TODO (rhoe) enemy tokens are placed reverse to player tokens so
+			//             pos {0, 0} is front right
+			
+			/* x_pos := (BOARD_COLUMNS-1) - x */
+			/* y_pos := (BOARD_ROWS-1) - y */
+			x_pos := x
+			y_pos := y
+			board_token := g.enemy_rows[x_pos][y_pos]
 			rect: Rect
 			rect.x = f32(x) * BOARD_TILE_SIZE
 			rect.y = f32(y) * BOARD_TILE_SIZE
 			rect.width = BOARD_TILE_SIZE
 			rect.height = BOARD_TILE_SIZE
-			rl.DrawTexturePro(g.atlas_texture, atlas_textures[board_token.texture_name].rect, rect, {}, 0, rl.WHITE)
+			if board_token.type != .None {
+				rl.DrawTexturePro(g.atlas_texture, atlas_textures[board_token.texture_name].rect, rect, {}, 0, rl.WHITE)
+			}
+
+			rl.DrawText(rl.TextFormat("(%d, %d)", x_pos, y_pos), i32(rect.x), i32(rect.y), 14, rl.GREEN)
+
 		}
 	}
 
@@ -655,7 +650,8 @@ game_init :: proc() {
 	// setup game board
 	for x in 0..<BOARD_COLUMNS {
 		for y in 0..<BOARD_ROWS {
-			g.board[x][y] = Board_Token{type=.None}
+			g.player_rows[x][y] = Board_Token{type=.None}
+			g.enemy_rows[x][y] = Board_Token{type=.None}
 		}
 	}
 
@@ -671,8 +667,12 @@ game_init :: proc() {
 		x := int(rl.GetRandomValue(0, BOARD_COLUMNS-1))
 		token := create_board_token(.Archer, .Enemy)
 		token.dir = .Down
-		g.board[x][y] = token
+		g.enemy_rows[x][y] = token
 	}
+
+	/* token := create_board_token(.Archer, .Enemy) */
+	/* g.enemy_rows[0][0] = token */
+
 
 	game_hot_reloaded(g)
 }
