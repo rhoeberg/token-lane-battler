@@ -12,6 +12,7 @@ _ :: fmt
 
 BOARD_COLUMNS :: 6
 BOARD_ROWS :: 2
+BOARD_PLAYER_TILE_COUNT :: BOARD_COLUMNS * BOARD_ROWS
 BOARD_TILE_SIZE :: 64
 PLAYER_HAND_Y_START :: 400
 PLAYER_HAND_X_START :: 0
@@ -58,29 +59,40 @@ Swordsman_Moving :: struct {
 
 Init_State :: struct {}
 
-Done :: struct {}
+Attack_Animation :: struct {
+	targets: sa.Small_Array(BOARD_PLAYER_TILE_COUNT, Board_Pos),
+}
 
 Token_State :: union {
 	Init_State,
-	Archer_Shooting,
-	Archer_Moving,
-	Swordsman_Moving,
-	Done,
+	Attack_Animation,
+	/* Archer_Shooting, */
+	/* Archer_Moving, */
+	/* Swordsman_Moving, */
 }
 
-Token_Direction :: enum {
-	Up,
-	Down,
+/* Token_Direction :: enum { */
+/* 	Up, */
+/* 	Down, */
+/* } */
+
+Token_Attributes :: enum {
+	Hit_Frontline,
+	Hit_Backline,
+	Sweep,
 }
+
+Token_Attribute_Set :: bit_set[Token_Attributes]
 
 Board_Token :: struct {
 	type: Board_Token_Type,
 	texture_name: Texture_Name,
 	alliance: Alliance,
 	state: Token_State,
-	dir: Token_Direction,
+	/* dir: Token_Direction, */
 	/* initialized: bool, */
 	finished_action: bool,
+	attributes: Token_Attribute_Set,
 }
 
 Player_State :: struct {
@@ -93,18 +105,20 @@ Player_State :: struct {
 	dragged_token_offset: Vec2,
 }
 
-Doing_Enemy_Actions_State :: struct {
-	start: f64,
-	current_board_pos: Board_Pos,
-}
 Getting_Tokens_State :: struct {
 }
 Playing_Tokens_State :: struct {
 }
 Doing_Actions_State :: struct {
+	initialized: bool,
 	start: f64,
 	current_board_pos: Board_Pos,
 	/* doing_action_action_initialized: bool, */
+}
+Doing_Enemy_Actions_State :: struct {
+	initialized: bool,
+	start: f64,
+	current_board_pos: Board_Pos,
 }
 
 Game_Round_State :: union {
@@ -161,6 +175,7 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 	case .None:
 	case .Archer:
 		token.texture_name = .Archer
+		token.attributes = {.Hit_Backline, .Hit_Frontline}
 		/* token.state = archer_state */
 	case .Swordsman:
 		token.texture_name = .Test_Face
@@ -183,13 +198,14 @@ get_token_from_board_pos :: proc(pos: Board_Pos, alliance: Alliance) -> (^Board_
 	// we should probably store the tokens in a seperate array and use an
 	// index offset for the handle
 	// this way we can mutate the tokens and they will be correct everywhere
+	token: ^Board_Token
 	if alliance == .Player {
-		token := &g.player_rows[pos.x][pos.y]
-		return token, true
+		token = &g.player_rows[pos.x][pos.y]
 	} else {
-		token := &g.enemy_rows[pos.x][pos.y]
-		return token, true
+		token = &g.enemy_rows[pos.x][pos.y]
 	}
+
+	return token, true
 }
 
 // get the next position given a board position
@@ -357,8 +373,15 @@ update :: proc() {
 		/////////////////
 		// HARDCODED END OF PLAYING TOKENS BUTTON
 		if rl.IsKeyPressed(.SPACE) {
+			doing_actions: Doing_Actions_State
+			doing_actions.initialized = false
+			g.round_state = doing_actions
+			fmt.println("space pressed")
+		}
+	case Doing_Actions_State:
 
-			// TODO (rhoe) here we reset all tokens to not finished so they can run their actions again
+		if !state.initialized {
+			fmt.println("init player actions")
 			for x in 0..<BOARD_COLUMNS {
 				for y in 0..<BOARD_ROWS {
 					if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid {
@@ -367,14 +390,11 @@ update :: proc() {
 					}
 				}
 			}
-			
 
-			doing_actions: Doing_Actions_State
-			doing_actions.start = rl.GetTime()
-			doing_actions.current_board_pos = {0, 0}
-			g.round_state = doing_actions
+			state.start = rl.GetTime()
+			state.current_board_pos = {0, 0}
+			state.initialized = true
 		}
-	case Doing_Actions_State:
 
 		// get token board pos
 		token_pos, pos_ok := find_next_token(state.current_board_pos, .Player)
@@ -394,7 +414,38 @@ update :: proc() {
 		do_token_action(current_token, token_pos, state.start)
 
 	case Doing_Enemy_Actions_State:
-		g.round_state = Playing_Tokens_State{}
+		if !state.initialized {
+			fmt.println("init enemy actions")
+			for x in 0..<BOARD_COLUMNS {
+				for y in 0..<BOARD_ROWS {
+					if token, token_valid := get_token_from_board_pos({x, y}, .Enemy); token_valid {
+						token.finished_action = false
+						token.state = Init_State{}
+					}
+				}
+			}
+
+			state.start = rl.GetTime()
+			state.current_board_pos = {0, 0}
+			state.initialized = true
+		}
+
+		// get token board pos
+		token_pos, pos_ok := find_next_token(state.current_board_pos, .Enemy)
+		if !pos_ok {
+			g.round_state = Playing_Tokens_State{}
+			break
+		}
+
+		// get token pointer
+		current_token, token_ok := get_token_from_board_pos(token_pos, .Enemy)
+		if !token_ok || current_token.finished_action {
+			state.current_board_pos = increment_board_position(state.current_board_pos)
+			break
+		}
+
+		// do action
+		do_token_action(current_token, token_pos, state.start)
 	}
 
 	update_vfx()
@@ -407,12 +458,97 @@ update :: proc() {
 /* 	return new_pos */
 /* } */
 
+get_backline :: proc(x: int, alliance: Alliance) -> Board_Pos {
+	if alliance == .Player {
+		return {x, 1}
+	} else {
+		return {x, 0}
+	}
+}
+
+get_frontline :: proc(x: int, alliance: Alliance) -> Board_Pos {
+	if alliance == .Player {
+		return {x, 0}
+	} else {
+		return {x, 1}
+	}
+}
+
+get_targets :: proc(token: ^Board_Token, pos: Board_Pos) -> sa.Small_Array(BOARD_PLAYER_TILE_COUNT, Board_Pos) {
+	result: sa.Small_Array(BOARD_PLAYER_TILE_COUNT, Board_Pos)
+
+	opp_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player
+
+	if .Hit_Frontline in token.attributes {
+		sa.append(&result, get_frontline(pos.x, opp_alliance))
+		if .Sweep in token.attributes {
+			// add front plus front-left and front-right token
+			sa.append(&result, get_frontline(pos.x-1, opp_alliance))
+			sa.append(&result, get_frontline(pos.x+1, opp_alliance))
+		}
+	}
+
+	if .Hit_Backline in token.attributes {
+		sa.append(&result, get_backline(pos.x, opp_alliance))
+		if .Sweep in token.attributes {
+			sa.append(&result, get_backline(pos.x-1, opp_alliance))
+			sa.append(&result, get_backline(pos.x+1, opp_alliance))
+		}
+	}
+
+
+	return result
+}
+
 // returns returns false if token is done
 // TODO (rhoe) probably a bit of a confusion return var
 do_token_action :: proc(token: ^Board_Token, pos: Board_Pos, start_time: f64) {
 
 	if token.finished_action do return
 
+	#partial switch &variant in token.state {
+	case Init_State:
+		// handle token init targetting
+
+		attack_anim_state: Attack_Animation
+		attack_anim_state.targets = get_targets(token, pos)
+
+		opp_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player
+		for target_pos in sa.slice(&attack_anim_state.targets) {
+			fmt.println("found target:", target_pos)
+			sa.clear(&g.active_vfx)
+			arrow: Arrow_VFX
+			arrow.t = 0
+			arrow.start = get_board_pos_screen_pos(pos, token.alliance) + {BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2
+			arrow.target = get_board_pos_screen_pos(target_pos, opp_alliance) + {BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2
+			vfx: VFX
+			vfx.done = false
+			vfx.start_time = rl.GetTime()
+			vfx.subtype = arrow
+			sa.append(&g.active_vfx, vfx)
+		}
+
+		token.state = attack_anim_state
+
+	case Attack_Animation:
+		if sa.len(g.active_vfx) <= 0 {
+			token.finished_action = true
+
+			
+			opposite_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player
+			for target_pos in sa.slice(&variant.targets) {
+				if target_token, target_token_ok := get_token_from_board_pos(target_pos, opposite_alliance); target_token_ok {
+					target_token.type = .None
+				}
+			}
+
+			token.finished_action = true
+		}
+
+	}
+
+
+	/*
 	#partial switch token.type {
 	case .Archer:
 		#partial switch variant in token.state {
@@ -428,10 +564,15 @@ do_token_action :: proc(token: ^Board_Token, pos: Board_Pos, start_time: f64) {
 
 			target_pos := Board_Pos{pos.x, 1}
 			target_token, found_target = get_token_from_board_pos(target_pos, opposite_alliance)
-			if !found_target {
+			if !found_target || target_token.type == .None {
 				target_pos = Board_Pos{pos.x, 0}
 				target_token, found_target = get_token_from_board_pos(target_pos, opposite_alliance)
+				// TODO (rhoe) messy
+				if target_token.type == .None {
+					found_target = false
+				}
 			}
+
 
 			if found_target {
 				fmt.println("found target:", target_pos)
@@ -450,6 +591,7 @@ do_token_action :: proc(token: ^Board_Token, pos: Board_Pos, start_time: f64) {
 				shooting_state.target = target_pos
 				token.state = shooting_state
 			} else {
+				fmt.println("couldnt find target")
 				token.finished_action = true
 			}
 		case Archer_Shooting:
@@ -480,6 +622,7 @@ do_token_action :: proc(token: ^Board_Token, pos: Board_Pos, start_time: f64) {
 		/* } */
 		/* return true */
 	}
+*/
 
 	/* return false */
 }
@@ -662,13 +805,20 @@ game_init :: proc() {
 	}
 
 	// setup enemies
-	for _ in 0..<4 {
-		y := int(rl.GetRandomValue(0, 1))
-		x := int(rl.GetRandomValue(0, BOARD_COLUMNS-1))
-		token := create_board_token(.Archer, .Enemy)
-		token.dir = .Down
-		g.enemy_rows[x][y] = token
+	for x in 0..<BOARD_COLUMNS {
+		for y in 0..<BOARD_ROWS {
+			token := create_board_token(.Archer, .Enemy)
+			/* token.dir = .Down */
+			g.enemy_rows[x][y] = token
+		}
 	}
+	/* for _ in 0..<4 { */
+	/* 	y := int(rl.GetRandomValue(0, 1)) */
+	/* 	x := int(rl.GetRandomValue(0, BOARD_COLUMNS-1)) */
+	/* 	token := create_board_token(.Archer, .Enemy) */
+	/* 	token.dir = .Down */
+	/* 	g.enemy_rows[x][y] = token */
+	/* } */
 
 	/* token := create_board_token(.Archer, .Enemy) */
 	/* g.enemy_rows[0][0] = token */
