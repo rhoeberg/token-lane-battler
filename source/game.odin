@@ -13,7 +13,7 @@ _ :: fmt
 BOARD_COLUMNS :: 6
 BOARD_ROWS :: 2
 BOARD_PLAYER_TILE_COUNT :: BOARD_COLUMNS * BOARD_ROWS
-BOARD_TILE_SIZE :: 64
+BOARD_TILE_SIZE :: 100
 PLAYER_HAND_Y_START :: 400
 PLAYER_HAND_X_START :: 0
 PLAYER_MAX_HAND_SIZE :: 5
@@ -32,6 +32,7 @@ Alliance :: enum {
 Board_Token_Type :: enum {
 	None,
 	Archer,
+	Ranger,
 	Swordsman,
 }
 
@@ -79,6 +80,8 @@ Token_State :: union {
 Token_Attributes :: enum {
 	Hit_Frontline,
 	Hit_Backline,
+	/* Prio_Backline, // try to hit backline first then hit frontline */
+	// Pierce, // hit front and backline
 	Sweep,
 }
 
@@ -93,6 +96,7 @@ Board_Token :: struct {
 	/* initialized: bool, */
 	finished_action: bool,
 	attributes: Token_Attribute_Set,
+	life: i16,
 }
 
 Player_State :: struct {
@@ -105,10 +109,8 @@ Player_State :: struct {
 	dragged_token_offset: Vec2,
 }
 
-Getting_Tokens_State :: struct {
-}
-Playing_Tokens_State :: struct {
-}
+Getting_Tokens_State :: struct {}
+Playing_Tokens_State :: struct {}
 Doing_Actions_State :: struct {
 	initialized: bool,
 	start: f64,
@@ -120,12 +122,14 @@ Doing_Enemy_Actions_State :: struct {
 	start: f64,
 	current_board_pos: Board_Pos,
 }
+Resolve_Damage_State :: struct {}
 
 Game_Round_State :: union {
 	Getting_Tokens_State,
 	Playing_Tokens_State,
 	Doing_Actions_State,
 	Doing_Enemy_Actions_State,
+	Resolve_Damage_State,
 }
 
 Arrow_VFX :: struct {
@@ -171,14 +175,25 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 	token: Board_Token
 	token.type = type
 	token.alliance = alliance
+	token.life = 1
 	switch type {
 	case .None:
 	case .Archer:
 		token.texture_name = .Archer
-		token.attributes = {.Hit_Backline, .Hit_Frontline}
+		token.life = 1
+		/* token.attributes = {.Hit_Backline, .Hit_Frontline, .Sweep} */
+		token.attributes = {.Hit_Backline}
+		/* token.state = archer_state */
+	case .Ranger:
+		token.texture_name = .Archer
+		token.life = 2
+		/* token.attributes = {.Hit_Backline, .Hit_Frontline, .Sweep} */
+		token.attributes = {.Hit_Backline}
 		/* token.state = archer_state */
 	case .Swordsman:
+		token.life = 2
 		token.texture_name = .Test_Face
+		token.attributes = {.Hit_Frontline}
 	}
 
 	return token
@@ -400,6 +415,16 @@ update :: proc() {
 		token_pos, pos_ok := find_next_token(state.current_board_pos, .Player)
 		if !pos_ok {
 			g.round_state = Doing_Enemy_Actions_State{}
+			// TODO (rhoe) DO DAMAGE DIRECTLY ON TURN
+			for x in 0..<BOARD_COLUMNS {
+				for y in 0..<BOARD_ROWS {
+					if token, token_valid := get_token_from_board_pos({x, y}, .Enemy); token_valid {
+						if token.life <= 0 {
+							token.type = .None
+						}
+					}
+				}
+			}
 			break
 		}
 
@@ -412,6 +437,7 @@ update :: proc() {
 
 		// do action
 		do_token_action(current_token, token_pos, state.start)
+
 
 	case Doing_Enemy_Actions_State:
 		if !state.initialized {
@@ -434,6 +460,17 @@ update :: proc() {
 		token_pos, pos_ok := find_next_token(state.current_board_pos, .Enemy)
 		if !pos_ok {
 			g.round_state = Playing_Tokens_State{}
+			/* g.round_state = Resolve_Damage_State{} */
+			// TODO (rhoe) DO DAMAGE DIRECTLY ON TURN
+			for x in 0..<BOARD_COLUMNS {
+				for y in 0..<BOARD_ROWS {
+					if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid {
+						if token.life <= 0 {
+							token.type = .None
+						}
+					}
+				}
+			}
 			break
 		}
 
@@ -446,7 +483,33 @@ update :: proc() {
 
 		// do action
 		do_token_action(current_token, token_pos, state.start)
+
+	case Resolve_Damage_State:
+		// resolve player token damage
+		/* for x in 0..<BOARD_COLUMNS { */
+		/* 	for y in 0..<BOARD_ROWS { */
+		/* 		if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid { */
+		/* 			if token.life <= 0 { */
+		/* 				token.type = .None */
+		/* 			} */
+		/* 		} */
+		/* 	} */
+		/* } */
+
+		/* // resolve enemy token damage */
+		/* for x in 0..<BOARD_COLUMNS { */
+		/* 	for y in 0..<BOARD_ROWS { */
+		/* 		if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid { */
+		/* 			if token.life <= 0 { */
+		/* 				token.type = .None */
+		/* 			} */
+		/* 		} */
+		/* 	} */
+		/* } */
+
+
 	}
+	
 
 	update_vfx()
 }
@@ -514,9 +577,14 @@ do_token_action :: proc(token: ^Board_Token, pos: Board_Pos, start_time: f64) {
 		attack_anim_state.targets = get_targets(token, pos)
 
 		opp_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player
+		sa.clear(&g.active_vfx)
 		for target_pos in sa.slice(&attack_anim_state.targets) {
 			fmt.println("found target:", target_pos)
-			sa.clear(&g.active_vfx)
+
+			// TODO (rhoe) hardcoding the arrow anim for all units
+			// ---
+			// later we probably want to be able to configure the animation for each token
+			// with a more generalized animation system
 			arrow: Arrow_VFX
 			arrow.t = 0
 			arrow.start = get_board_pos_screen_pos(pos, token.alliance) + {BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2
@@ -526,6 +594,7 @@ do_token_action :: proc(token: ^Board_Token, pos: Board_Pos, start_time: f64) {
 			vfx.start_time = rl.GetTime()
 			vfx.subtype = arrow
 			sa.append(&g.active_vfx, vfx)
+			fmt.println("adding effect, total amount:", sa.len(g.active_vfx))
 		}
 
 		token.state = attack_anim_state
@@ -535,10 +604,15 @@ do_token_action :: proc(token: ^Board_Token, pos: Board_Pos, start_time: f64) {
 			token.finished_action = true
 
 			
+			
 			opposite_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player
 			for target_pos in sa.slice(&variant.targets) {
+
+
+				// TODO (rhoe) Hardcoded damage system, needs to be extended to a tagging system
 				if target_token, target_token_ok := get_token_from_board_pos(target_pos, opposite_alliance); target_token_ok {
-					target_token.type = .None
+					target_token.life -= 1
+					/* target_token.type = .None */
 				}
 			}
 
@@ -693,7 +767,8 @@ draw :: proc() {
 				rl.DrawTexturePro(g.atlas_texture, atlas_textures[board_token.texture_name].rect, rect, {}, 0, rl.WHITE)
 			}
 
-			rl.DrawText(rl.TextFormat("(%d, %d)", x, y), i32(rect.x), i32(rect.y), 14, rl.GREEN)
+			rl.DrawText(rl.TextFormat("(%d, %d)", x, y), i32(rect.x), i32(rect.y), 24, rl.GREEN)
+			rl.DrawText(rl.TextFormat("%d", board_token.life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
 		}
 	}
 
@@ -720,6 +795,7 @@ draw :: proc() {
 			}
 
 			rl.DrawText(rl.TextFormat("(%d, %d)", x_pos, y_pos), i32(rect.x), i32(rect.y), 14, rl.GREEN)
+			rl.DrawText(rl.TextFormat("%d", board_token.life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
 
 		}
 	}
