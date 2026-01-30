@@ -1,10 +1,10 @@
 /*
 
 next:
-- draw system
-- enemy wave system
-- handle end of game
-- log to show everything happening behind 
+- [x] draw system
+- [ ] enemy wave system
+- [x] handle end of game
+- [ ] log to show everything happening behind 
 
 
 crazy ideas:
@@ -162,6 +162,14 @@ Doing_Enemy_Actions_State :: struct {
 	current_board_pos: Board_Pos,
 }
 /* Resolve_Damage_State :: struct {} */
+Round_End_Result :: enum {
+	Player_Won,
+	Enemy_Won,
+	Draw,
+}
+Round_End_State :: struct {
+	result: Round_End_Result,
+}
 Player_Won_State :: struct {}
 Player_Lost_State :: struct {}
 
@@ -172,6 +180,7 @@ Game_Round_State :: union {
 	Doing_Actions_State,
 	Doing_Enemy_Actions_State,
 	/* Resolve_Damage_State, */
+	Round_End_State,
 	Player_Won_State,
 	Player_Lost_State,
 }
@@ -421,7 +430,7 @@ update :: proc() {
 				if g.player.food < 0 {
 					g.player_lives -= 1
 					/* g.round_state = End_Round_State{} */
-					g.round_state = Start_Round_State{}
+					g.round_state = Round_End_State{.Enemy_Won}
 					break
 				}
 
@@ -548,7 +557,7 @@ update :: proc() {
 				}
 			}
 
-			if check_round_end() {
+			if round_end, result := check_round_end(); round_end {
 				// round finished
 				// check if game is over (one player has 0 or less lives)
 				fmt.println("ROUND ENDED")
@@ -564,7 +573,7 @@ update :: proc() {
 				}
 
 
-				g.round_state = Playing_Tokens_State{}
+				g.round_state = Round_End_State{result}
 			} else {
 				g.round_state = Doing_Enemy_Actions_State{}
 			}
@@ -653,6 +662,11 @@ update :: proc() {
 		/* 	} */
 		/* } */
 
+	case Round_End_State:
+		if rl.IsKeyPressed(.SPACE) {
+			g.round_state = Start_Round_State{}
+		}
+		
 	case Player_Lost_State:
 	case Player_Won_State:
 	}
@@ -674,7 +688,7 @@ check_game_end :: proc() -> (game_end:bool, player_won:bool) {
 // checks if round ends
 // also mutates game state and gives removes life from looser
 // returns true if round should end
-check_round_end :: proc() -> bool {
+check_round_end :: proc() -> (bool, Round_End_Result) {
 	// check if game ended
 	// 1. check if enemy has more tokens
 	// 2. check if player has more tokens
@@ -708,7 +722,7 @@ check_round_end :: proc() -> bool {
 		for y in 0..<BOARD_ROWS {
 			if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid {
 				if token.type != .None {
-					/* player_has_tokens_left = true */
+					player_has_tokens_left = true
 					player_token_value += token.value
 					targets := get_targets(token, {x, y})
 					for target_pos in sa.slice(&targets) {
@@ -727,18 +741,18 @@ check_round_end :: proc() -> bool {
 	if !enemy_has_tokens_left && player_has_tokens_left {
 		// player won
 		g.enemy_lives -= 1
-		return true
+		return true, .Player_Won
 		
 	} else if enemy_has_tokens_left && !player_has_tokens_left {
 		// enemy won
 		g.player_lives -= 1
-		return true
+		return true, .Enemy_Won
 
 	} else if !enemy_has_tokens_left && !player_has_tokens_left {
 		// both players lost
 		g.player_lives -= 1
 		g.enemy_lives -= 1
-		return true
+		return true, .Draw
 
 	} else if enemy_has_tokens_left && player_has_tokens_left {
 		if !enemy_has_targets && !player_has_targets {
@@ -746,15 +760,16 @@ check_round_end :: proc() -> bool {
 			// player wins if equal value
 			if player_token_value >= enemy_token_value {
 				g.enemy_lives -= 1
+				return true, .Player_Won
 			} else {
 				g.player_lives -= 1
+				return true, .Enemy_Won
 			}
-
-			return true
+			return true, .Draw
 		}
 	}
 
-	return false
+	return false, {}
 }
 
 /* get_token_counter_pos :: proc(pos: Board_Pos) -> Board_Pos { */
@@ -1008,10 +1023,11 @@ draw :: proc() {
 			rect.height = BOARD_TILE_SIZE
 			if board_token.type != .None {
 				rl.DrawTexturePro(g.atlas_texture, atlas_textures[board_token.texture_name].rect, rect, {}, 0, rl.WHITE)
+				rl.DrawText(rl.TextFormat("%d", board_token.life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
 			}
 
-			rl.DrawText(rl.TextFormat("(%d, %d)", x, y), i32(rect.x), i32(rect.y), 24, rl.GREEN)
-			rl.DrawText(rl.TextFormat("%d", board_token.life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
+
+			/* rl.DrawText(rl.TextFormat("(%d, %d)", x, y), i32(rect.x), i32(rect.y), 24, rl.GREEN) */
 		}
 	}
 
@@ -1035,10 +1051,10 @@ draw :: proc() {
 			rect.height = BOARD_TILE_SIZE
 			if board_token.type != .None {
 				rl.DrawTexturePro(g.atlas_texture, atlas_textures[board_token.texture_name].rect, rect, {}, 0, rl.WHITE)
+				rl.DrawText(rl.TextFormat("%d", board_token.life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
 			}
 
-			rl.DrawText(rl.TextFormat("(%d, %d)", x_pos, y_pos), i32(rect.x), i32(rect.y), 14, rl.GREEN)
-			rl.DrawText(rl.TextFormat("%d", board_token.life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
+			/* rl.DrawText(rl.TextFormat("(%d, %d)", x_pos, y_pos), i32(rect.x), i32(rect.y), 14, rl.GREEN) */
 
 		}
 	}
@@ -1085,6 +1101,15 @@ draw :: proc() {
 	rl.DrawText(rl.TextFormat("FOOD:%d", g.player.food), 1000, 100, 20, rl.GREEN)
 
 	#partial switch state in g.round_state {
+	case Round_End_State:
+		switch state.result {
+		case .Player_Won:
+			rl.DrawText("ROUND WON!", 100, 200, 40, rl.GREEN)
+		case .Enemy_Won:
+			rl.DrawText("ROUND LOST!", 100, 200, 40, rl.RED)
+		case .Draw:
+			rl.DrawText("DRAW!", 100, 200, 40, rl.RED)
+		}
 	case Player_Won_State:
 		rl.DrawText("YOU WON", 100, 200, 40, rl.GREEN)
 	case Player_Lost_State:
