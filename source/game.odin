@@ -32,6 +32,7 @@ import rl "vendor:raylib"
 
 _ :: fmt
 
+// GRAPHICS CONFIGURATION
 BOARD_COLUMNS :: 6
 BOARD_ROWS :: 2
 BOARD_PLAYER_TILE_COUNT :: BOARD_COLUMNS * BOARD_ROWS
@@ -39,9 +40,18 @@ BOARD_TILE_SIZE :: 100
 BOARD_OFFSET_Y :: 50
 PLAYER_HAND_Y_START :: 500
 PLAYER_HAND_X_START :: 100
-PLAYER_MAX_HAND_SIZE :: 5
-
 PLAYER_ROW_OFFSET_Y :: (BOARD_ROWS * BOARD_TILE_SIZE) + BOARD_OFFSET_Y
+BAG_POS_Y :: 600
+BAG_POS_X :: 1000
+BAG_RADIUS :: 100
+END_DRAWING_BUTTON_POS_Y :: 300
+END_DRAWING_BUTTON_POS_X :: 1000
+END_DRAWING_BUTTON_RADIUS :: 100
+
+// GAMEPLAY CONFIGURATION
+PLAYER_MAX_HAND_SIZE :: 5
+PLAYER_MAX_BAG_SIZE :: 20
+
 
 Rect :: rl.Rectangle
 Vec2 :: rl.Vector2
@@ -120,19 +130,24 @@ Board_Token :: struct {
 	finished_action: bool,
 	attributes: Token_Attribute_Set,
 	life: i16,
-	value: int,
+	value: int, // could value and food cost be combined?
+	food_cost: int,
 }
 
 Player_State :: struct {
 	current_hand: sa.Small_Array(PLAYER_MAX_HAND_SIZE, Board_Token),
+	bag: sa.Small_Array(PLAYER_MAX_BAG_SIZE, Board_Token),
 
 	hovered_token_id: int, 
 	hovered_token_active: bool,
 	dragged_token_id: int, 
 	dragged_token_active: bool,
 	dragged_token_offset: Vec2,
+
+	food: int,
 }
 
+Start_Round_State :: struct {}
 Getting_Tokens_State :: struct {}
 Playing_Tokens_State :: struct {}
 Doing_Actions_State :: struct {
@@ -146,14 +161,19 @@ Doing_Enemy_Actions_State :: struct {
 	start: f64,
 	current_board_pos: Board_Pos,
 }
-Resolve_Damage_State :: struct {}
+/* Resolve_Damage_State :: struct {} */
+Player_Won_State :: struct {}
+Player_Lost_State :: struct {}
 
 Game_Round_State :: union {
+	Start_Round_State,
 	Getting_Tokens_State,
 	Playing_Tokens_State,
 	Doing_Actions_State,
 	Doing_Enemy_Actions_State,
-	Resolve_Damage_State,
+	/* Resolve_Damage_State, */
+	Player_Won_State,
+	Player_Lost_State,
 }
 
 Arrow_VFX :: struct {
@@ -204,6 +224,7 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 	token.alliance = alliance
 	token.life = 1
 	token.value = 1
+	token.food_cost = 1
 	switch type {
 	case .None:
 	case .Archer:
@@ -348,7 +369,77 @@ update :: proc() {
 	}
 
 	switch &state in g.round_state {
+	case Start_Round_State:
+
+		fmt.println("STARTING NEW ROUND")
+
+		// reset board
+		for x in 0..<BOARD_COLUMNS {
+			for y in 0..<BOARD_ROWS {
+				if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid {
+					token.type = .None
+				}
+			}
+		}
+		for x in 0..<BOARD_COLUMNS {
+			for y in 0..<BOARD_ROWS {
+				if token, token_valid := get_token_from_board_pos({x, y}, .Enemy); token_valid {
+					token.type = .None
+				}
+			}
+		}
+
+		sa.clear(&g.player.current_hand)
+
+		g.player.food = 5
+		g.round_state = Getting_Tokens_State{}
+
+
 	case Getting_Tokens_State:
+
+		// 1. click bag to draw token
+		// 2. get token and consume food cost
+		// 3. check if we used too much food
+		// 4. play token
+		// 5. player ends or repeats
+		mouse := rl.GetMousePosition()
+		if rl.CheckCollisionPointCircle(mouse, {BAG_POS_X, BAG_POS_Y}, BAG_RADIUS) {
+			if rl.IsMouseButtonReleased(.LEFT) {
+
+				// check if there is more tokens left
+				if sa.len(g.player.bag) <= 0 {
+					g.round_state = Player_Lost_State{}
+					break
+				} 
+
+				fmt.println("PRESSED BAG!")
+				rnd := rl.GetRandomValue(0, i32(sa.len(g.player.bag)-1))
+				token := sa.get(g.player.bag, int(rnd))
+				sa.unordered_remove(&g.player.bag, int(rnd))
+				sa.append(&g.player.current_hand, token)
+				g.player.food -= token.food_cost
+				if g.player.food < 0 {
+					g.player_lives -= 1
+					/* g.round_state = End_Round_State{} */
+					g.round_state = Start_Round_State{}
+					break
+				}
+
+
+			}
+		}
+
+
+		
+		if rl.CheckCollisionPointCircle(mouse, {END_DRAWING_BUTTON_POS_X, END_DRAWING_BUTTON_POS_Y}, END_DRAWING_BUTTON_RADIUS) {
+			if rl.IsMouseButtonReleased(.LEFT) {
+				fmt.println("END DRAWING")
+				g.round_state = Playing_Tokens_State{}
+			}
+		}
+		
+		
+
 	case Playing_Tokens_State:
 		g.player.hovered_token_active = false
 		mouse := rl.GetMousePosition()
@@ -461,6 +552,18 @@ update :: proc() {
 				// round finished
 				// check if game is over (one player has 0 or less lives)
 				fmt.println("ROUND ENDED")
+
+				if game_end, player_won := check_game_end(); game_end {
+					if player_won {
+						g.round_state = Player_Won_State{}
+						break
+					} else {
+						g.round_state = Player_Lost_State{}
+						break
+					}
+				}
+
+
 				g.round_state = Playing_Tokens_State{}
 			} else {
 				g.round_state = Doing_Enemy_Actions_State{}
@@ -527,7 +630,7 @@ update :: proc() {
 		// do action
 		do_token_action(current_token, token_pos, state.start)
 
-	case Resolve_Damage_State:
+	/* case Resolve_Damage_State: */
 		// resolve player token damage
 		/* for x in 0..<BOARD_COLUMNS { */
 		/* 	for y in 0..<BOARD_ROWS { */
@@ -550,13 +653,23 @@ update :: proc() {
 		/* 	} */
 		/* } */
 
-
+	case Player_Lost_State:
+	case Player_Won_State:
 	}
 	
 
 	update_vfx()
 }
 
+check_game_end :: proc() -> (game_end:bool, player_won:bool) {
+	if g.player_lives <= 0 {
+		return true, false
+	} else if g.enemy_lives <= 0 {
+		return true, true
+	}
+
+	return false, false
+}
 
 // checks if round ends
 // also mutates game state and gives removes life from looser
@@ -595,7 +708,7 @@ check_round_end :: proc() -> bool {
 		for y in 0..<BOARD_ROWS {
 			if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid {
 				if token.type != .None {
-					player_has_tokens_left = true
+					/* player_has_tokens_left = true */
 					player_token_value += token.value
 					targets := get_targets(token, {x, y})
 					for target_pos in sa.slice(&targets) {
@@ -960,9 +1073,23 @@ draw :: proc() {
 
 
 	//////////
-	// DRAW LIVES
+	// DRAW PLAYER BAG
+	rl.DrawCircle(BAG_POS_X, BAG_POS_Y, BAG_RADIUS, rl.BROWN)
+	rl.DrawText(rl.TextFormat("%d", sa.len(g.player.bag)), BAG_POS_X, BAG_POS_Y, 20, rl.WHITE)
+	rl.DrawCircle(END_DRAWING_BUTTON_POS_X, END_DRAWING_BUTTON_POS_Y, END_DRAWING_BUTTON_RADIUS, rl.GRAY)
+
+	//////////
+	// DRAW UI
 	rl.DrawText(rl.TextFormat("enemy lives:%d", g.enemy_lives), 0, 0, 20, rl.RED)
 	rl.DrawText(rl.TextFormat("player lives:%d", g.player_lives), 400, 0, 20, rl.RED)
+	rl.DrawText(rl.TextFormat("FOOD:%d", g.player.food), 1000, 100, 20, rl.GREEN)
+
+	#partial switch state in g.round_state {
+	case Player_Won_State:
+		rl.DrawText("YOU WON", 100, 200, 40, rl.GREEN)
+	case Player_Lost_State:
+		rl.DrawText("YOU LOST", 100, 200, 40, rl.GREEN)
+	}
 
 	draw_vfx()
 
@@ -1000,7 +1127,8 @@ game_init :: proc() {
 	atlas_image := rl.LoadImageFromMemory(".png", raw_data(atlas_data[:]), i32(len(atlas_data)))
 	g.atlas_texture = rl.LoadTextureFromImage(atlas_image)
 
-	g.round_state = Playing_Tokens_State{}
+	g.player.food = 5
+	g.round_state = Getting_Tokens_State{}
 
 	// setup game board
 	for x in 0..<BOARD_COLUMNS {
@@ -1010,11 +1138,16 @@ game_init :: proc() {
 		}
 	}
 
-	for _ in 0..<PLAYER_MAX_HAND_SIZE {
+	for _ in 0..<PLAYER_MAX_BAG_SIZE {
 		token_type := Board_Token_Type(rl.GetRandomValue(1, len(Board_Token_Type)-1))
-		sa.append(&g.player.current_hand, create_board_token(token_type, .Player))
-
+		sa.append(&g.player.bag, create_board_token(token_type, .Player))
 	}
+
+	sa.clear(&g.player.current_hand)
+	/* for _ in 0..<PLAYER_MAX_HAND_SIZE { */
+	/* 	token_type := Board_Token_Type(rl.GetRandomValue(1, len(Board_Token_Type)-1)) */
+	/* 	sa.append(&g.player.current_hand, create_board_token(token_type, .Player)) */
+	/* } */
 
 	// setup enemies
 	/* for x in 0..<BOARD_COLUMNS { */
