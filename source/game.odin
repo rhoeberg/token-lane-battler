@@ -1,4 +1,26 @@
 /*
+
+next:
+- draw system
+- enemy wave system
+- handle end of game
+- log to show everything happening behind 
+
+
+crazy ideas:
+- tokens that are more than 1 tile in size 
+
+
+draw system:
+you have a certain amount of food for the round
+whenever you draw a token you consume some food
+some tokens consumes more food than 1
+if you go minus in food something bad happens
+but what?
+- you loose
+- some penalty 
+
+
 */
 
 package game
@@ -14,11 +36,12 @@ BOARD_COLUMNS :: 6
 BOARD_ROWS :: 2
 BOARD_PLAYER_TILE_COUNT :: BOARD_COLUMNS * BOARD_ROWS
 BOARD_TILE_SIZE :: 100
-PLAYER_HAND_Y_START :: 400
-PLAYER_HAND_X_START :: 0
+BOARD_OFFSET_Y :: 50
+PLAYER_HAND_Y_START :: 500
+PLAYER_HAND_X_START :: 100
 PLAYER_MAX_HAND_SIZE :: 5
 
-PLAYER_ROW_OFFSET_Y :: BOARD_ROWS * BOARD_TILE_SIZE
+PLAYER_ROW_OFFSET_Y :: (BOARD_ROWS * BOARD_TILE_SIZE) + BOARD_OFFSET_Y
 
 Rect :: rl.Rectangle
 Vec2 :: rl.Vector2
@@ -97,6 +120,7 @@ Board_Token :: struct {
 	finished_action: bool,
 	attributes: Token_Attribute_Set,
 	life: i16,
+	value: int,
 }
 
 Player_State :: struct {
@@ -167,6 +191,9 @@ Game_Memory :: struct {
 	/* archer_arrow_active: bool, */
 	/* archer_arrow_target: Vec2, */
 	/* archer_arrow_pos: Vec2, */
+
+	player_lives: i32,
+	enemy_lives: i32,
 }
 
 g: ^Game_Memory
@@ -176,6 +203,7 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 	token.type = type
 	token.alliance = alliance
 	token.life = 1
+	token.value = 1
 	switch type {
 	case .None:
 	case .Archer:
@@ -192,6 +220,7 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 		/* token.state = archer_state */
 	case .Swordsman:
 		token.life = 2
+		token.value = 2
 		token.texture_name = .Test_Face
 		token.attributes = {.Hit_Frontline}
 	}
@@ -414,7 +443,9 @@ update :: proc() {
 		// get token board pos
 		token_pos, pos_ok := find_next_token(state.current_board_pos, .Player)
 		if !pos_ok {
-			g.round_state = Doing_Enemy_Actions_State{}
+			
+
+
 			// TODO (rhoe) DO DAMAGE DIRECTLY ON TURN
 			for x in 0..<BOARD_COLUMNS {
 				for y in 0..<BOARD_ROWS {
@@ -425,6 +456,16 @@ update :: proc() {
 					}
 				}
 			}
+
+			if check_round_end() {
+				// round finished
+				// check if game is over (one player has 0 or less lives)
+				fmt.println("ROUND ENDED")
+				g.round_state = Playing_Tokens_State{}
+			} else {
+				g.round_state = Doing_Enemy_Actions_State{}
+			}
+
 			break
 		}
 
@@ -459,7 +500,6 @@ update :: proc() {
 		// get token board pos
 		token_pos, pos_ok := find_next_token(state.current_board_pos, .Enemy)
 		if !pos_ok {
-			g.round_state = Playing_Tokens_State{}
 			/* g.round_state = Resolve_Damage_State{} */
 			// TODO (rhoe) DO DAMAGE DIRECTLY ON TURN
 			for x in 0..<BOARD_COLUMNS {
@@ -471,6 +511,9 @@ update :: proc() {
 					}
 				}
 			}
+
+			g.round_state = Doing_Actions_State{}
+
 			break
 		}
 
@@ -514,6 +557,93 @@ update :: proc() {
 	update_vfx()
 }
 
+
+// checks if round ends
+// also mutates game state and gives removes life from looser
+// returns true if round should end
+check_round_end :: proc() -> bool {
+	// check if game ended
+	// 1. check if enemy has more tokens
+	// 2. check if player has more tokens
+	enemy_has_tokens_left := false
+	enemy_has_targets := false
+	enemy_token_value := 0
+	for x in 0..<BOARD_COLUMNS {
+		for y in 0..<BOARD_ROWS {
+			if token, token_valid := get_token_from_board_pos({x, y}, .Enemy); token_valid {
+				if token.type != .None {
+					enemy_has_tokens_left = true
+					enemy_token_value += token.value
+					targets := get_targets(token, {x, y})
+					for target_pos in sa.slice(&targets) {
+						if target, ok := get_token_from_board_pos(target_pos, .Player); ok {
+							if target.type != .None {
+								enemy_has_targets = true
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	player_has_tokens_left := false
+	player_has_targets := false
+	player_token_value := 0
+	for x in 0..<BOARD_COLUMNS {
+		for y in 0..<BOARD_ROWS {
+			if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid {
+				if token.type != .None {
+					player_has_tokens_left = true
+					player_token_value += token.value
+					targets := get_targets(token, {x, y})
+					for target_pos in sa.slice(&targets) {
+						if target, ok := get_token_from_board_pos(target_pos, .Enemy); ok {
+							if target.type != .None {
+								player_has_targets = true
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if !enemy_has_tokens_left && player_has_tokens_left {
+		// player won
+		g.enemy_lives -= 1
+		return true
+		
+	} else if enemy_has_tokens_left && !player_has_tokens_left {
+		// enemy won
+		g.player_lives -= 1
+		return true
+
+	} else if !enemy_has_tokens_left && !player_has_tokens_left {
+		// both players lost
+		g.player_lives -= 1
+		g.enemy_lives -= 1
+		return true
+
+	} else if enemy_has_tokens_left && player_has_tokens_left {
+		if !enemy_has_targets && !player_has_targets {
+			// count token value and decide winner
+			// player wins if equal value
+			if player_token_value >= enemy_token_value {
+				g.enemy_lives -= 1
+			} else {
+				g.player_lives -= 1
+			}
+
+			return true
+		}
+	}
+
+	return false
+}
+
 /* get_token_counter_pos :: proc(pos: Board_Pos) -> Board_Pos { */
 /* 	new_pos: Board_Pos */
 /* 	new_pos.x = BOARD_COLUMNS - pos.x - 1 */
@@ -537,6 +667,7 @@ get_frontline :: proc(x: int, alliance: Alliance) -> Board_Pos {
 	}
 }
 
+// returns the board position of possible targets
 get_targets :: proc(token: ^Board_Token, pos: Board_Pos) -> sa.Small_Array(BOARD_PLAYER_TILE_COUNT, Board_Pos) {
 	result: sa.Small_Array(BOARD_PLAYER_TILE_COUNT, Board_Pos)
 
@@ -594,7 +725,6 @@ do_token_action :: proc(token: ^Board_Token, pos: Board_Pos, start_time: f64) {
 			vfx.start_time = rl.GetTime()
 			vfx.subtype = arrow
 			sa.append(&g.active_vfx, vfx)
-			fmt.println("adding effect, total amount:", sa.len(g.active_vfx))
 		}
 
 		token.state = attack_anim_state
@@ -747,7 +877,7 @@ draw :: proc() {
 		for y in 0..<BOARD_ROWS*2 {
 			x_pos := x * BOARD_TILE_SIZE
 			/* y_pos := y * BOARD_TILE_SIZE + PLAYER_ROW_OFFSET_Y */
-			y_pos := y * BOARD_TILE_SIZE
+			y_pos := (y * BOARD_TILE_SIZE) + BOARD_OFFSET_Y
 			rl.DrawRectangleLines(i32(x_pos), i32(y_pos), BOARD_TILE_SIZE, BOARD_TILE_SIZE, rl.BLACK)
 		}
 	}
@@ -787,7 +917,7 @@ draw :: proc() {
 			board_token := g.enemy_rows[x_pos][y_pos]
 			rect: Rect
 			rect.x = f32(x) * BOARD_TILE_SIZE
-			rect.y = f32(y) * BOARD_TILE_SIZE
+			rect.y = (f32(y) * BOARD_TILE_SIZE) + BOARD_OFFSET_Y
 			rect.width = BOARD_TILE_SIZE
 			rect.height = BOARD_TILE_SIZE
 			if board_token.type != .None {
@@ -827,6 +957,12 @@ draw :: proc() {
 			}
 		}
 	}
+
+
+	//////////
+	// DRAW LIVES
+	rl.DrawText(rl.TextFormat("enemy lives:%d", g.enemy_lives), 0, 0, 20, rl.RED)
+	rl.DrawText(rl.TextFormat("player lives:%d", g.player_lives), 400, 0, 20, rl.RED)
 
 	draw_vfx()
 
@@ -881,23 +1017,25 @@ game_init :: proc() {
 	}
 
 	// setup enemies
-	for x in 0..<BOARD_COLUMNS {
-		for y in 0..<BOARD_ROWS {
-			token := create_board_token(.Archer, .Enemy)
-			/* token.dir = .Down */
-			g.enemy_rows[x][y] = token
-		}
-	}
-	/* for _ in 0..<4 { */
-	/* 	y := int(rl.GetRandomValue(0, 1)) */
-	/* 	x := int(rl.GetRandomValue(0, BOARD_COLUMNS-1)) */
-	/* 	token := create_board_token(.Archer, .Enemy) */
-	/* 	token.dir = .Down */
-	/* 	g.enemy_rows[x][y] = token */
+	/* for x in 0..<BOARD_COLUMNS { */
+	/* 	for y in 0..<BOARD_ROWS { */
+	/* 		token := create_board_token(.Archer, .Enemy) */
+	/* 		/\* token.dir = .Down *\/ */
+	/* 		g.enemy_rows[x][y] = token */
+	/* 	} */
 	/* } */
+	for _ in 0..<4 {
+		y := int(rl.GetRandomValue(0, 1))
+		x := int(rl.GetRandomValue(0, BOARD_COLUMNS-1))
+		token := create_board_token(.Archer, .Enemy)
+		g.enemy_rows[x][y] = token
+	}
 
 	/* token := create_board_token(.Archer, .Enemy) */
 	/* g.enemy_rows[0][0] = token */
+
+	g.player_lives = 10
+	g.enemy_lives = 10
 
 
 	game_hot_reloaded(g)
