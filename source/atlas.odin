@@ -27,12 +27,14 @@ LETTERS_IN_FONT :: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz12345678
 
 // A generated square in the atlas you can use with rl.SetShapesTexture to make
 // raylib shapes such as rl.DrawRectangleRec() use the atlas.
-SHAPES_TEXTURE_RECT :: Rect {65, 0, 10, 10}
+SHAPES_TEXTURE_RECT :: Rect {125, 0, 10, 10}
 
 Texture_Name :: enum {
 	None,
-	Test_Face,
 	Archer,
+	Test_Face,
+	Rats,
+	Cleaver,
 }
 
 Atlas_Texture :: struct {
@@ -52,8 +54,10 @@ Atlas_Texture :: struct {
 
 atlas_textures: [Texture_Name]Atlas_Texture = {
 	.None = {},
-	.Test_Face = { rect = {33, 0, 31, 32}, offset_top = 0, offset_right = 1, offset_bottom = 0, offset_left = 0, document_size = {32, 32}, duration = 0.100},
-	.Archer = { rect = {0, 0, 32, 32}, offset_top = 0, offset_right = 0, offset_bottom = 0, offset_left = 0, document_size = {32, 32}, duration = 0.100},
+	.Archer = { rect = {33, 0, 32, 32}, offset_top = 0, offset_right = 0, offset_bottom = 0, offset_left = 0, document_size = {32, 32}, duration = 0.100},
+	.Test_Face = { rect = {66, 0, 31, 32}, offset_top = 0, offset_right = 1, offset_bottom = 0, offset_left = 0, document_size = {32, 32}, duration = 0.100},
+	.Rats = { rect = {98, 0, 26, 27}, offset_top = 5, offset_right = 0, offset_bottom = 0, offset_left = 6, document_size = {32, 32}, duration = 0.100},
+	.Cleaver = { rect = {0, 0, 32, 32}, offset_top = 0, offset_right = 0, offset_bottom = 0, offset_left = 0, document_size = {32, 32}, duration = 0.100},
 }
 
 Animation_Name :: enum {
