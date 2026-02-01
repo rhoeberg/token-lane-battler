@@ -54,6 +54,9 @@ END_DRAWING_BUTTON_POS_X :: 1000
 END_DRAWING_BUTTON_RADIUS :: 100
 MAX_ACTIVE_VFX :: 12
 
+FRONT_ROW :: 0
+BACK_ROW :: 1
+
 // GAMEPLAY CONFIGURATION
 PLAYER_LIVES :: 5
 PLAYER_ROUND_FOOD :: 5
@@ -92,10 +95,10 @@ Token_State :: union {
 }
 
 Token_Attribute_Set :: bit_set[Token_Attributes]
-Token_Target_Set :: bit_set[Ability_Target_Attribute]
+Ability_Target_Set :: bit_set[Ability_Target_Attribute]
 
 Ability :: struct {
-	target: Ability_Target_Attribute,
+	target: Ability_Target_Set,
 	effect: Ability_Effect,
 }
 
@@ -105,11 +108,16 @@ Ability_Target_Attribute :: enum {
 	Backline_Priority,
 	Frontline_Priority,
 	Sweep, // hits targets to the right and behind main target
-	Pierce, // hits targets behind frontrow targets
+	/* Pierce, // hits targets behind frontrow targets */
 	Self, // targets itself
-	Self_Adjecent, // targets token to the left and right of self
+	Self_Adjacent, // targets token to the left and right of self
 	Self_Front, // targets token in front of self
 	Self_Behind, // targets token behind self
+	// self row
+	// self row in front
+	// self row behind
+	// front row = enemy front row
+	// back row = enemy back row
 }
 
 Ability_Effect :: enum {
@@ -127,6 +135,7 @@ Token_Attributes :: enum {
 }
 
 
+TOKEN_MAX_ABILITIES :: 5
 Board_Token :: struct {
 	type: Board_Token_Type,
 	texture_name: Texture_Name,
@@ -145,8 +154,7 @@ Board_Token :: struct {
 	backliner: bool,
 
 	// ability
-	target: Token_Target_Set,
-	effect: Ability_Effect,
+	abilities: sa.Small_Array(TOKEN_MAX_ABILITIES, Ability),
 }
 
 Player_State :: struct {
@@ -935,70 +943,107 @@ get_targets :: proc(token: ^Board_Token, pos: Board_Pos) -> sa.Small_Array(BOARD
 }
 
 // returns the board position of possible targets
-/* get_targets2 :: proc(token: ^Board_Token, pos: Board_Pos) -> sa.Small_Array(BOARD_PLAYER_TILE_COUNT * 2, Board_Pos) { */
-/* 	result: sa.Small_Array(BOARD_PLAYER_TILE_COUNT*2, Board_Pos) */
+get_ability_targets :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Token) -> sa.Small_Array(BOARD_PLAYER_TILE_COUNT * 2, Board_Pos) {
+	result: sa.Small_Array(BOARD_PLAYER_TILE_COUNT*2, Board_Pos)
 
-/* 	opp_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player */
+	opp_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player
 
-/* 	/\* if .Hit_Frontline in token.attributes { *\/ */
-/* 	/\* 	sa.append(&result, get_frontline(pos.x, opp_alliance)) *\/ */
-/* 	/\* 	if .Sweep in token.attributes { *\/ */
-/* 	/\* 		// add front plus front-left and front-right token *\/ */
-/* 	/\* 		sa.append(&result, get_frontline(pos.x-1, opp_alliance)) *\/ */
-/* 	/\* 		sa.append(&result, get_frontline(pos.x+1, opp_alliance)) *\/ */
-/* 	/\* 	} *\/ */
-/* 	/\* } *\/ */
+	/* if .Hit_Frontline in token.attributes { */
+	/* 	sa.append(&result, get_frontline(pos.x, opp_alliance)) */
+	/* 	if .Sweep in token.attributes { */
+	/* 		// add front plus front-left and front-right token */
+	/* 		sa.append(&result, get_frontline(pos.x-1, opp_alliance)) */
+	/* 		sa.append(&result, get_frontline(pos.x+1, opp_alliance)) */
+	/* 	} */
+	/* } */
 
 
-/* 	main_target_pos := get_frontline(pos.x, opp_alliance) */
-/* 	if .Backline_Priority in token.target { */
-/* 		if token, ok := get_token_from_board_pos(get_backline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None { */
-/* 			sa.append(&result, get_backline(pos.x, opp_alliance))  */
-/* 		} else { */
-/* 			// no backline try frontline instead */
-/* 			if token, ok := get_token_from_board_pos(get_frontline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None { */
-/* 				sa.append(&result, get_frontline(pos.x, opp_alliance))  */
-/* 			} */
-/* 		} */
-/* 	} else if .Frontline_Priority in token.target { */
-/* 		if token, ok := get_token_from_board_pos(get_frontline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None { */
-/* 			sa.append(&result, get_frontline(pos.x, opp_alliance))  */
-/* 		} else { */
-/* 			// no frontline try backline instead */
-/* 			if token, ok := get_token_from_board_pos(get_backline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None { */
-/* 				sa.append(&result, get_backline(pos.x, opp_alliance))  */
-/* 			} */
-/* 		} */
-/* 	} else { */
-/* 		if .Frontline in token.target { */
-/* 			// add frontline unit */
-/* 			if token, ok := get_token_from_board_pos(get_frontline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None { */
-/* 				sa.append(&result, get_frontline(pos.x, opp_alliance))  */
-/* 			} */
-/* 		} */
+	main_target_pos := get_frontline(pos.x, opp_alliance)
+	if .Backline_Priority in ability.target {
+		if token, ok := get_token_from_board_pos(get_backline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None {
+			sa.append(&result, get_backline(pos.x, opp_alliance))
+		} else {
+			// no backline try frontline instead
+			if token, ok := get_token_from_board_pos(get_frontline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None {
+				sa.append(&result, get_frontline(pos.x, opp_alliance))
+			}
+		}
+	} else if .Frontline_Priority in ability.target {
+		if token, ok := get_token_from_board_pos(get_frontline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None {
+			sa.append(&result, get_frontline(pos.x, opp_alliance))
+		} else {
+			// no frontline try backline instead
+			if token, ok := get_token_from_board_pos(get_backline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None {
+				sa.append(&result, get_backline(pos.x, opp_alliance))
+			}
+		}
+	} else {
+		if .Frontline in ability.target {
+			// add frontline unit
+			if token, ok := get_token_from_board_pos(get_frontline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None {
+				sa.append(&result, get_frontline(pos.x, opp_alliance))
+			}
+		}
 
-/* 		if .Backline in token.target { */
-/* 			// add frontline unit */
-/* 			if token, ok := get_token_from_board_pos(get_backline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None { */
-/* 				sa.append(&result, get_backline(pos.x, opp_alliance))  */
-/* 			} */
-/* 		} */
-/* 	} */
+		if .Backline in ability.target {
+			// add frontline unit
+			if token, ok := get_token_from_board_pos(get_backline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None {
+				sa.append(&result, get_backline(pos.x, opp_alliance))
+			}
+		}
+	}
 
-/* 	sa.append(&result, main_target_pos) */
-/* 	if .Sweep in token.attributes { */
-/* 		for token in sa.slice(&result) { */
-/* 			if left, left_ok := get_pos_to_the_side(main_target_pos, -1); left_ok { */
-/* 				sa.append(&result, left) */
-/* 			} */
-/* 			if right, right_ok := get_pos_to_the_side(main_target_pos, -1); right_ok { */
-/* 				sa.append(&result, right) */
-/* 			} */
-/* 		} */
-/* 	} */
+	sa.append(&result, main_target_pos)
+	if .Sweep in ability.target {
+		for token in sa.slice(&result) {
+			if left, left_ok := get_pos_to_the_side(main_target_pos, -1); left_ok {
+				sa.append(&result, left)
+			}
+			if right, right_ok := get_pos_to_the_side(main_target_pos, 1); right_ok {
+				sa.append(&result, right)
+			}
+		}
+	}
 
-/* 	return result */
-/* } */
+
+	if .Self in ability.target {
+		sa.append(&result, pos)
+	}
+
+	if .Self_Front in ability.target {
+		if pos.y != BACK_ROW {
+			front_pos := Board_Pos{pos.x, FRONT_ROW}
+			if token, ok := get_token_from_board_pos(front_pos, token.alliance); ok && token.type != .None {
+				sa.append(&result, front_pos)
+			}
+		}
+	}
+
+	if .Self_Behind in ability.target {
+		if pos.y != FRONT_ROW {
+			back_pos := Board_Pos{pos.x, BACK_ROW}
+			if token, ok := get_token_from_board_pos(back_pos, token.alliance); ok && token.type != .None {
+				sa.append(&result, back_pos)
+			}
+		}
+	}
+
+	if .Self_Adjacent in ability.target {
+		if left, left_ok := get_pos_to_the_side(pos, -1); left_ok {
+			sa.append(&result, left)
+		}
+		if right, right_ok := get_pos_to_the_side(pos, 1); right_ok {
+			sa.append(&result, right)
+		}
+	}
+	
+
+	return result
+}
+
+do_token_ability :: proc(ability: ^Ability, pos: Board_Pos, start_time: f64) {
+
+}
 
 // returns returns false if token is done
 // TODO (rhoe) probably a bit of a confusion return var
