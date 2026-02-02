@@ -66,7 +66,11 @@ PLAYER_MAX_BAG_SIZE :: 30
 
 Rect :: rl.Rectangle
 Vec2 :: rl.Vector2
-Board_Pos :: [2]int
+/* Board_Pos :: [2]int */
+Board_Pos :: struct {
+	x, y: int,
+	alliance: Alliance,
+}
 
 Alliance :: enum {
 	Player,
@@ -97,9 +101,20 @@ Token_State :: union {
 Token_Attribute_Set :: bit_set[Token_Attributes]
 Ability_Target_Set :: bit_set[Ability_Target_Attribute]
 
+Ability_Init_State :: struct{}
+Ability_Animation_State :: struct{}
+Ability_End_State :: struct{}
+Ability_State :: union {
+	Ability_Init_State,
+	Ability_Animation_State,
+	Ability_End_State,
+}
+
 Ability :: struct {
 	target: Ability_Target_Set,
 	effect: Ability_Effect,
+	state: Ability_State,
+	current_targets: sa.Small_Array(BOARD_PLAYER_TILE_COUNT*2, Board_Pos),
 }
 
 Ability_Target_Attribute :: enum {
@@ -155,6 +170,7 @@ Board_Token :: struct {
 
 	// ability
 	abilities: sa.Small_Array(TOKEN_MAX_ABILITIES, Ability),
+	current_ability: int,
 }
 
 Player_State :: struct {
@@ -280,12 +296,20 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 	case .Archer:
 		token.texture_name = .Archer
 		token.life = 1
-		token.attributes = {.Hit_Backline}
+		ability: Ability
+		ability.effect = .Damage
+		ability.target = {.Backline_Priority}
+		sa.append(&token.abilities, ability)
+		/* token.attributes = {.Hit_Backline} */
 		token.backliner = true
 	case .Ranger:
 		token.texture_name = .Archer
 		token.life = 2
-		token.attributes = {.Hit_Backline}
+		ability: Ability
+		ability.effect = .Damage
+		ability.target = {.Backline_Priority}
+		sa.append(&token.abilities, ability)
+		/* token.attributes = {.Hit_Backline} */
 		token.backliner = true
 	case .Swordsman:
 		token.life = 2
@@ -293,12 +317,20 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 		token.food_cost = 2
 		token.texture_name = .Test_Face
 		/* token.attributes = {.Hit_Frontline} */
+		ability: Ability
+		ability.effect = .Damage
+		ability.target = {.Frontline}
+		sa.append(&token.abilities, ability)
 	case .Cleaver:
 		token.life = 1
 		token.value = 2
 		token.food_cost = 2
 		token.texture_name = .Cleaver
-		token.attributes = {.Sweep}
+		/* token.attributes = {.Sweep} */
+		ability: Ability
+		ability.effect = .Damage
+		ability.target = {.Frontline, .Sweep}
+		sa.append(&token.abilities, ability)
 	case .Healer:
 		
 	case .Rats:
@@ -313,7 +345,8 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 }
 
 // get board token from given position
-get_token_from_board_pos :: proc(pos: Board_Pos, alliance: Alliance) -> (^Board_Token, bool) {
+/* get_token_from_board_pos :: proc(pos: Board_Pos, alliance: Alliance) -> (^Board_Token, bool) { */
+get_token_from_board_pos :: proc(pos: Board_Pos) -> (^Board_Token, bool) {
 
 	// bounds check 
 	if pos.x > BOARD_COLUMNS-1 || pos.y > BOARD_ROWS-1 || pos.x < 0 || pos.y < 0 {
@@ -327,7 +360,7 @@ get_token_from_board_pos :: proc(pos: Board_Pos, alliance: Alliance) -> (^Board_
 	// index offset for the handle
 	// this way we can mutate the tokens and they will be correct everywhere
 	token: ^Board_Token
-	if alliance == .Player {
+	if pos.alliance == .Player {
 		token = &g.player_rows[pos.x][pos.y]
 	} else {
 		token = &g.enemy_rows[pos.x][pos.y]
@@ -380,16 +413,16 @@ decrement_board_position :: proc(pos: Board_Pos) -> Board_Pos {
 	return next_pos
 }
 
-get_board_pos_screen_pos :: proc(pos: Board_Pos, alliance: Alliance) -> Vec2 {
+get_board_pos_screen_pos :: proc(pos: Board_Pos) -> Vec2 {
 	result: Vec2
 		/* result.x = f32(pos.x * BOARD_TILE_SIZE) */
 		/* result.y = f32(pos.y * BOARD_TILE_SIZE) + PLAYER_ROW_OFFSET_Y */
 	pos_x := pos.x
-	pos_y := alliance == .Enemy ? (BOARD_ROWS-1) - pos.y : pos.y
+	pos_y := pos.alliance == .Enemy ? (BOARD_ROWS-1) - pos.y : pos.y
 
 	result.x = f32(pos_x * BOARD_TILE_SIZE)
 	result.y = f32(pos_y * BOARD_TILE_SIZE)
-	if alliance == .Player do result.y += PLAYER_ROW_OFFSET_Y
+	if pos.alliance == .Player do result.y += PLAYER_ROW_OFFSET_Y
 
 	/* switch alliance { */
 	/* case .Player: */
@@ -412,18 +445,18 @@ get_board_pos_screen_pos :: proc(pos: Board_Pos, alliance: Alliance) -> Vec2 {
 // - not type .None
 // - matching alliance
 // - not finished_action
-find_next_token :: proc(start: Board_Pos, alliance: Alliance) -> (Board_Pos, bool) {
+find_next_token :: proc(start: Board_Pos) -> (Board_Pos, bool) {
 	next_pos := start
 	for {
 		token: ^Board_Token
 		token_pos_ok: bool
-		if token, token_pos_ok = get_token_from_board_pos(next_pos, alliance); !token_pos_ok {
+		if token, token_pos_ok = get_token_from_board_pos(next_pos); !token_pos_ok {
 			// token not valid (outside of bounds)
 			return {}, false
 		}
 
 		// succesfully found token
-		if token.type != .None && token.alliance == alliance && !token.finished_action {
+		if token.type != .None && !token.finished_action {
 			return next_pos, true
 		}
 
@@ -445,14 +478,14 @@ update :: proc() {
 		// reset board
 		for x in 0..<BOARD_COLUMNS {
 			for y in 0..<BOARD_ROWS {
-				if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid {
+				if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid {
 					token.type = .None
 				}
 			}
 		}
 		for x in 0..<BOARD_COLUMNS {
 			for y in 0..<BOARD_ROWS {
-				if token, token_valid := get_token_from_board_pos({x, y}, .Enemy); token_valid {
+				if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid {
 					token.type = .None
 				}
 			}
@@ -461,8 +494,8 @@ update :: proc() {
 		sa.clear(&g.player.current_hand)
 
 		// setup wave
-		level := sa.get(g.levels, g.current_level)
-		wave := sa.get(level.waves, g.current_wave)
+		level := sa.get_ptr(&g.levels, g.current_level)
+		wave := sa.get_ptr(&level.waves, g.current_wave)
 		g.enemy_rows = wave.enemy_rows
 
 		g.player.food = PLAYER_ROUND_FOOD
@@ -557,7 +590,7 @@ update :: proc() {
 						rect.height = BOARD_TILE_SIZE
 						if rl.CheckCollisionPointRec(mouse, rect) {
 							found_valid_board_position = true
-							valid_board_position = {x, y}
+							valid_board_position = {x, y, .Player}
 							break
 						}
 					}
@@ -601,25 +634,30 @@ update :: proc() {
 			fmt.println("space pressed")
 		}
 	case Doing_Actions_State:
+		fmt.println("DOING ACTIONS STATE")
 
 		if !state.initialized {
 			fmt.println("init player actions")
 			for x in 0..<BOARD_COLUMNS {
 				for y in 0..<BOARD_ROWS {
-					if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid {
+					if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid {
 						token.finished_action = false
 						token.state = Init_State{}
+
+						for &ability in sa.slice(&token.abilities) {
+							ability.state = Ability_Init_State{}
+						}
 					}
 				}
 			}
 
 			state.start = rl.GetTime()
-			state.current_board_pos = {0, 0}
+			state.current_board_pos = {0, 0, .Player}
 			state.initialized = true
 		}
 
 		// get token board pos
-		token_pos, pos_ok := find_next_token(state.current_board_pos, .Player)
+		token_pos, pos_ok := find_next_token(state.current_board_pos)
 		if !pos_ok {
 			
 
@@ -653,8 +691,10 @@ update :: proc() {
 
 
 					g.round_state = Round_End_State{result}
+						fmt.println("ROUND END STATE")
 				} else {
 					g.round_state = Doing_Enemy_Actions_State{}
+					fmt.println("DOING ENEMY ACTIONS STATE")
 				}
 
 			}
@@ -662,7 +702,7 @@ update :: proc() {
 		}
 
 		// get token pointer
-		current_token, token_ok := get_token_from_board_pos(token_pos, .Player)
+		current_token, token_ok := get_token_from_board_pos(token_pos)
 		if !token_ok || current_token.finished_action {
 			state.current_board_pos = increment_board_position(state.current_board_pos)
 			break
@@ -673,27 +713,32 @@ update :: proc() {
 
 
 	case Doing_Enemy_Actions_State:
+		fmt.println("DOING ENEMY ACTIONS STATE")
 		if !state.initialized {
 			fmt.println("init enemy actions")
 			for x in 0..<BOARD_COLUMNS {
 				for y in 0..<BOARD_ROWS {
-					if token, token_valid := get_token_from_board_pos({x, y}, .Enemy); token_valid {
+					if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid {
 						token.finished_action = false
 						token.state = Init_State{}
+						for &ability in sa.slice(&token.abilities) {
+							ability.state = Ability_Init_State{}
+						}
 					}
 				}
 			}
 
 			state.start = rl.GetTime()
-			state.current_board_pos = {0, 0}
+			state.current_board_pos = {0, 0, .Enemy}
 			state.initialized = true
 		}
 
 		// get token board pos
-		token_pos, pos_ok := find_next_token(state.current_board_pos, .Enemy)
+		token_pos, pos_ok := find_next_token(state.current_board_pos)
 		if !pos_ok {
 			if rl.IsKeyPressed(.SPACE) {
 				g.round_state = Resolve_Damage_State{false}
+				fmt.println("RESOLIVE DAMAGE STATE")
 			}
 			// TODO (rhoe) DO DAMAGE DIRECTLY ON TURN
 			/* for x in 0..<BOARD_COLUMNS { */
@@ -712,7 +757,7 @@ update :: proc() {
 		}
 
 		// get token pointer
-		current_token, token_ok := get_token_from_board_pos(token_pos, .Enemy)
+		current_token, token_ok := get_token_from_board_pos(token_pos)
 		if !token_ok || current_token.finished_action {
 			state.current_board_pos = increment_board_position(state.current_board_pos)
 			break
@@ -728,7 +773,7 @@ update :: proc() {
 			/* resolve player token damage */
 			for x in 0..<BOARD_COLUMNS {
 				for y in 0..<BOARD_ROWS {
-					if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid && token.type != .None {
+					if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid && token.type != .None {
 						if token.life <= 0 {
 							token.type = .None
 						}
@@ -739,9 +784,9 @@ update :: proc() {
 			// resolve enemy token damage
 			for x in 0..<BOARD_COLUMNS {
 				for y in 0..<BOARD_ROWS {
-					if token, token_valid := get_token_from_board_pos({x, y}, .Enemy); token_valid && token.type != .None {
+					if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid && token.type != .None {
 						if token.life <= 0 {
-							fmt.println("ENEMY DIED:", Board_Pos{x, y})
+							fmt.println("ENEMY DIED:", Board_Pos{x, y, .Enemy})
 							token.type = .None
 						}
 					}
@@ -794,19 +839,11 @@ check_round_end :: proc() -> (bool, Round_End_Result) {
 	enemy_token_value := 0
 	for x in 0..<BOARD_COLUMNS {
 		for y in 0..<BOARD_ROWS {
-			if token, token_valid := get_token_from_board_pos({x, y}, .Enemy); token_valid {
+			if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid {
 				if token.type != .None {
 					enemy_has_tokens_left = true
 					enemy_token_value += token.value
-					targets := get_targets(token, {x, y})
-					for target_pos in sa.slice(&targets) {
-						if target, ok := get_token_from_board_pos(target_pos, .Player); ok {
-							if target.type != .None {
-								enemy_has_targets = true
-								break
-							}
-						}
-					}
+					enemy_has_targets = check_if_token_has_targets(token, {x, y, .Enemy})
 				}
 			}
 		}
@@ -817,19 +854,11 @@ check_round_end :: proc() -> (bool, Round_End_Result) {
 	player_token_value := 0
 	for x in 0..<BOARD_COLUMNS {
 		for y in 0..<BOARD_ROWS {
-			if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid {
+			if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid {
 				if token.type != .None {
 					player_has_tokens_left = true
 					player_token_value += token.value
-					targets := get_targets(token, {x, y})
-					for target_pos in sa.slice(&targets) {
-						if target, ok := get_token_from_board_pos(target_pos, .Enemy); ok {
-							if target.type != .None {
-								player_has_targets = true
-								break
-							}
-						}
-					}
+					player_has_targets = check_if_token_has_targets(token, {x, y, .Player})
 				}
 			}
 		}
@@ -876,26 +905,26 @@ check_round_end :: proc() -> (bool, Round_End_Result) {
 /* 	return new_pos */
 /* } */
 
-get_backline :: proc(x: int, alliance: Alliance) -> Board_Pos {
-	return {x, 1}
-	/* if alliance == .Player { */
-	/* 	return {x, 1} */
-	/* } else { */
-	/* 	return {x, 0} */
-	/* } */
-}
+/* get_backline :: proc(x: int, alliance: Alliance) -> Board_Pos { */
+/* 	return {x, 1} */
+/* 	/\* if alliance == .Player { *\/ */
+/* 	/\* 	return {x, 1} *\/ */
+/* 	/\* } else { *\/ */
+/* 	/\* 	return {x, 0} *\/ */
+/* 	/\* } *\/ */
+/* } */
 
-get_frontline :: proc(x: int, alliance: Alliance) -> Board_Pos {
-	return {x, 0}
-	/* if alliance == .Player { */
-	/* 	return {x, 0} */
-	/* } else { */
-	/* 	return {x, 1} */
-	/* } */
-}
+/* get_frontline :: proc(x: int, alliance: Alliance) -> Board_Pos { */
+/* 	return {x, 0} */
+/* 	/\* if alliance == .Player { *\/ */
+/* 	/\* 	return {x, 0} *\/ */
+/* 	/\* } else { *\/ */
+/* 	/\* 	return {x, 1} *\/ */
+/* 	/\* } *\/ */
+/* } */
 
 get_pos_to_the_side :: proc(pos: Board_Pos, offset: int) -> (Board_Pos, bool) {
-	result := pos + {offset, 0}
+	result := Board_Pos{pos.x + offset, pos.y, pos.alliance}
 	if result.x < 0 || result.x > BOARD_COLUMNS-1 {
 		return {}, false
 	}
@@ -903,43 +932,52 @@ get_pos_to_the_side :: proc(pos: Board_Pos, offset: int) -> (Board_Pos, bool) {
 	return result, true
 }
 
-// returns the board position of possible targets
-get_targets :: proc(token: ^Board_Token, pos: Board_Pos) -> sa.Small_Array(BOARD_PLAYER_TILE_COUNT, Board_Pos) {
-	result: sa.Small_Array(BOARD_PLAYER_TILE_COUNT, Board_Pos)
+/* // returns the board position of possible targets */
+/* get_targets :: proc(token: ^Board_Token, pos: Board_Pos) -> sa.Small_Array(BOARD_PLAYER_TILE_COUNT, Board_Pos) { */
+/* 	result: sa.Small_Array(BOARD_PLAYER_TILE_COUNT, Board_Pos) */
 
-	opp_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player
+/* 	opp_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player */
 
-	/* if .Hit_Frontline in token.attributes { */
-	/* 	sa.append(&result, get_frontline(pos.x, opp_alliance)) */
-	/* 	if .Sweep in token.attributes { */
-	/* 		// add front plus front-left and front-right token */
-	/* 		sa.append(&result, get_frontline(pos.x-1, opp_alliance)) */
-	/* 		sa.append(&result, get_frontline(pos.x+1, opp_alliance)) */
-	/* 	} */
-	/* } */
+/* 	/\* if .Hit_Frontline in token.attributes { *\/ */
+/* 	/\* 	sa.append(&result, get_frontline(pos.x, opp_alliance)) *\/ */
+/* 	/\* 	if .Sweep in token.attributes { *\/ */
+/* 	/\* 		// add front plus front-left and front-right token *\/ */
+/* 	/\* 		sa.append(&result, get_frontline(pos.x-1, opp_alliance)) *\/ */
+/* 	/\* 		sa.append(&result, get_frontline(pos.x+1, opp_alliance)) *\/ */
+/* 	/\* 	} *\/ */
+/* 	/\* } *\/ */
 
-	main_target_pos := get_frontline(pos.x, opp_alliance)
+/* 	main_target_pos := Board_Pos{pos.x, FRONT_ROW, opp_alliance} */
 
-	if .Hit_Backline in token.attributes {
-		if back_token, back_ok := get_token_from_board_pos(get_backline(pos.x, opp_alliance), opp_alliance); back_ok && back_token.type != .None {
-			main_target_pos = get_backline(pos.x, opp_alliance)
-			fmt.println("TARGETTING BACKLINE: ", main_target_pos)
-		} else {
-			fmt.println("NO BACKLINE TARGET, FRONTLINE: ", main_target_pos)
-		}
-	} 
+/* 	if .Hit_Backline in token.attributes { */
+/* 		if back_token, back_ok := get_token_from_board_pos({pos.x, BACK_ROW, opp_alliance}); back_ok && back_token.type != .None { */
+/* 			main_target_pos = {pos.x, BACK_ROW, opp_alliance} */
+/* 			fmt.println("TARGETTING BACKLINE: ", main_target_pos) */
+/* 		} else { */
+/* 			fmt.println("NO BACKLINE TARGET, FRONTLINE: ", main_target_pos) */
+/* 		} */
+/* 	}  */
 
-	sa.append(&result, main_target_pos)
-	if .Sweep in token.attributes {
-		if left, left_ok := get_pos_to_the_side(main_target_pos, -1); left_ok {
-			sa.append(&result, left)
-		}
-		if right, right_ok := get_pos_to_the_side(main_target_pos, 1); right_ok {
-			sa.append(&result, right)
-		}
+/* 	sa.append(&result, main_target_pos) */
+/* 	if .Sweep in token.attributes { */
+/* 		if left, left_ok := get_pos_to_the_side(main_target_pos, -1); left_ok { */
+/* 			sa.append(&result, left) */
+/* 		} */
+/* 		if right, right_ok := get_pos_to_the_side(main_target_pos, 1); right_ok { */
+/* 			sa.append(&result, right) */
+/* 		} */
+/* 	} */
+
+/* 	return result */
+/* } */
+
+check_if_token_has_targets :: proc(token: ^Board_Token, pos: Board_Pos) -> bool {
+	for &ability in sa.slice(&token.abilities) {
+		targets := get_ability_targets(&ability, pos, token)
+		if sa.len(targets) > 0 do return true
 	}
 
-	return result
+	return false
 }
 
 // returns the board position of possible targets
@@ -958,48 +996,48 @@ get_ability_targets :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Tok
 	/* } */
 
 
-	main_target_pos := get_frontline(pos.x, opp_alliance)
+	/* main_target_pos := Board_Pos{pos.x, FRONT_ROW, opp_alliance} */
 	if .Backline_Priority in ability.target {
-		if token, ok := get_token_from_board_pos(get_backline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None {
-			sa.append(&result, get_backline(pos.x, opp_alliance))
+		if back_token, back_ok := get_token_from_board_pos({pos.x, BACK_ROW, opp_alliance}); back_ok && back_token.type != .None {
+			sa.append(&result, Board_Pos{pos.x, BACK_ROW, opp_alliance})
 		} else {
 			// no backline try frontline instead
-			if token, ok := get_token_from_board_pos(get_frontline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None {
-				sa.append(&result, get_frontline(pos.x, opp_alliance))
+			if front_token, front_ok := get_token_from_board_pos(Board_Pos{pos.x, FRONT_ROW, opp_alliance}); front_ok && front_token.type != .None {
+				sa.append(&result, Board_Pos{pos.x, FRONT_ROW, opp_alliance})
 			}
 		}
 	} else if .Frontline_Priority in ability.target {
-		if token, ok := get_token_from_board_pos(get_frontline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None {
-			sa.append(&result, get_frontline(pos.x, opp_alliance))
+		if front_token, front_ok := get_token_from_board_pos({pos.x, FRONT_ROW, opp_alliance}); front_ok && front_token.type != .None {
+			sa.append(&result, Board_Pos{pos.x, FRONT_ROW, opp_alliance})
 		} else {
 			// no frontline try backline instead
-			if token, ok := get_token_from_board_pos(get_backline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None {
-				sa.append(&result, get_backline(pos.x, opp_alliance))
+			if back_token, back_ok := get_token_from_board_pos({pos.x, BACK_ROW, opp_alliance}); back_ok && back_token.type != .None {
+				sa.append(&result, Board_Pos{pos.x, BACK_ROW, opp_alliance})
 			}
 		}
 	} else {
 		if .Frontline in ability.target {
 			// add frontline unit
-			if token, ok := get_token_from_board_pos(get_frontline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None {
-				sa.append(&result, get_frontline(pos.x, opp_alliance))
+			if front_token, front_ok := get_token_from_board_pos({pos.x, FRONT_ROW, opp_alliance}); front_ok && front_token.type != .None {
+				sa.append(&result, Board_Pos{pos.x, FRONT_ROW, opp_alliance})
 			}
 		}
 
 		if .Backline in ability.target {
 			// add frontline unit
-			if token, ok := get_token_from_board_pos(get_backline(pos.x, opp_alliance), opp_alliance); ok && token.type != .None {
-				sa.append(&result, get_backline(pos.x, opp_alliance))
+			if back_token, ok := get_token_from_board_pos({pos.x, BACK_ROW, opp_alliance}); ok && back_token.type != .None {
+				sa.append(&result, Board_Pos{pos.x, BACK_ROW, opp_alliance})
 			}
 		}
 	}
 
-	sa.append(&result, main_target_pos)
+	/* sa.append(&result, main_target_pos) */
 	if .Sweep in ability.target {
-		for token in sa.slice(&result) {
-			if left, left_ok := get_pos_to_the_side(main_target_pos, -1); left_ok {
+		for target_pos in sa.slice(&result) {
+			if left, left_ok := get_pos_to_the_side(target_pos, -1); left_ok {
 				sa.append(&result, left)
 			}
-			if right, right_ok := get_pos_to_the_side(main_target_pos, 1); right_ok {
+			if right, right_ok := get_pos_to_the_side(target_pos, 1); right_ok {
 				sa.append(&result, right)
 			}
 		}
@@ -1012,8 +1050,8 @@ get_ability_targets :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Tok
 
 	if .Self_Front in ability.target {
 		if pos.y != BACK_ROW {
-			front_pos := Board_Pos{pos.x, FRONT_ROW}
-			if token, ok := get_token_from_board_pos(front_pos, token.alliance); ok && token.type != .None {
+			front_pos := Board_Pos{pos.x, FRONT_ROW, token.alliance}
+			if front_token, ok := get_token_from_board_pos(front_pos); ok && front_token.type != .None {
 				sa.append(&result, front_pos)
 			}
 		}
@@ -1021,19 +1059,24 @@ get_ability_targets :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Tok
 
 	if .Self_Behind in ability.target {
 		if pos.y != FRONT_ROW {
-			back_pos := Board_Pos{pos.x, BACK_ROW}
-			if token, ok := get_token_from_board_pos(back_pos, token.alliance); ok && token.type != .None {
+			back_pos := Board_Pos{pos.x, BACK_ROW, token.alliance}
+			if back_token, ok := get_token_from_board_pos(back_pos); ok && back_token.type != .None {
 				sa.append(&result, back_pos)
 			}
 		}
 	}
 
 	if .Self_Adjacent in ability.target {
+		// TODO (rhoe) SHOULD CHECK IF THESE TOKENS ARE NOT NULL
 		if left, left_ok := get_pos_to_the_side(pos, -1); left_ok {
-			sa.append(&result, left)
+			if left_token, ok := get_token_from_board_pos(left); ok && left_token.type != .None {
+				sa.append(&result, left)
+			}
 		}
-		if right, right_ok := get_pos_to_the_side(pos, 1); right_ok {
-			sa.append(&result, right)
+		if right, right_ok := get_pos_to_the_side(pos, -1); right_ok {
+			if right_token, ok := get_token_from_board_pos(right); ok && right_token.type != .None {
+				sa.append(&result, right)
+			}
 		}
 	}
 	
@@ -1041,26 +1084,22 @@ get_ability_targets :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Tok
 	return result
 }
 
-do_token_ability :: proc(ability: ^Ability, pos: Board_Pos, start_time: f64) {
+/////////////////////////////
+////// YOU
+////// ARE
+////// HERE!!!!!!!!!!!!!!
+/*
+returns true if done
+*/
+do_token_ability :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Token, start_time: f64) -> bool {
+	/* fmt.println("DOING TOKEN ABILITY:", ability, token) */
+	switch state in ability.state {
+	case Ability_Init_State:
+		// do targetting etc..
+		sa.clear(&ability.current_targets)
+		ability.current_targets = get_ability_targets(ability, pos, token)
 
-}
-
-// returns returns false if token is done
-// TODO (rhoe) probably a bit of a confusion return var
-do_token_action :: proc(token: ^Board_Token, pos: Board_Pos, start_time: f64) {
-
-	if token.finished_action do return
-
-	#partial switch &variant in token.state {
-	case Init_State:
-		// handle token init targetting
-
-		attack_anim_state: Attack_Animation
-		attack_anim_state.targets = get_targets(token, pos)
-
-		opp_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player
-		sa.clear(&g.active_vfx)
-		for target_pos in sa.slice(&attack_anim_state.targets) {
+		for target_pos in sa.slice(&ability.current_targets) {
 			fmt.println("found target:", target_pos)
 
 			// TODO (rhoe) hardcoding the arrow anim for all units
@@ -1069,8 +1108,8 @@ do_token_action :: proc(token: ^Board_Token, pos: Board_Pos, start_time: f64) {
 			// with a more generalized animation system
 			arrow: Arrow_VFX
 			arrow.t = 0
-			arrow.start = get_board_pos_screen_pos(pos, token.alliance) + ({BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2)
-			arrow.target = get_board_pos_screen_pos(target_pos, opp_alliance) + {BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2
+			arrow.start = get_board_pos_screen_pos(pos) + ({BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2)
+			arrow.target = get_board_pos_screen_pos(target_pos) + {BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2
 			vfx: VFX
 			vfx.done = false
 			vfx.start_time = rl.GetTime()
@@ -1078,29 +1117,99 @@ do_token_action :: proc(token: ^Board_Token, pos: Board_Pos, start_time: f64) {
 			sa.append(&g.active_vfx, vfx)
 		}
 
-		token.state = attack_anim_state
+		ability.state = Ability_Animation_State{}
 
-	case Attack_Animation:
+	case Ability_Animation_State:
+		// wait for animation to finish
+		// TODO (rhoe) currently just looks for any VFX to be done
 		if sa.len(g.active_vfx) <= 0 {
-			token.finished_action = true
-
-			
-			
-			opposite_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player
-			for target_pos in sa.slice(&variant.targets) {
-
-
-				// TODO (rhoe) Hardcoded damage system, needs to be extended to a tagging system
-				if target_token, target_token_ok := get_token_from_board_pos(target_pos, opposite_alliance); target_token_ok {
-					target_token.life -= 1
-					/* target_token.type = .None */
-				}
-			}
-
-			token.finished_action = true
+			fmt.println("FINISHED ABILITIES")
+			ability.state = Ability_End_State{}
 		}
 
+	case Ability_End_State:
+		// deal damage etc..
+		for target_pos in sa.slice(&ability.current_targets) {
+			if target_token, target_token_ok := get_token_from_board_pos(target_pos); target_token_ok && target_token.type != .None {
+				target_token.life -= 1
+			}
+			
+		}
+		return true
 	}
+
+
+	return false
+}
+
+// returns returns false if token is done
+// TODO (rhoe) probably a bit of a confusion return var
+do_token_action :: proc(token: ^Board_Token, pos: Board_Pos, start_time: f64) {
+
+	if token.finished_action do return
+
+	if sa.len(token.abilities) == 0 {
+		token.finished_action = true
+		return 
+	}
+
+	if do_token_ability(sa.get_ptr(&token.abilities, token.current_ability), pos, token, start_time) {
+		token.current_ability += 1
+		if token.current_ability >= sa.len(token.abilities)-1 {
+			token.finished_action = true
+		}
+	}
+
+
+	/* if token.finished_action do return */
+
+	/* #partial switch &variant in token.state { */
+	/* case Init_State: */
+	/* 	// handle token init targetting */
+
+	/* 	attack_anim_state: Attack_Animation */
+	/* 	attack_anim_state.targets = get_targets(token, pos) */
+
+	/* 	opp_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player */
+	/* 	sa.clear(&g.active_vfx) */
+	/* 	for target_pos in sa.slice(&attack_anim_state.targets) { */
+	/* 		fmt.println("found target:", target_pos) */
+
+	/* 		// TODO (rhoe) hardcoding the arrow anim for all units */
+	/* 		// --- */
+	/* 		// later we probably want to be able to configure the animation for each token */
+	/* 		// with a more generalized animation system */
+	/* 		arrow: Arrow_VFX */
+	/* 		arrow.t = 0 */
+	/* 		arrow.start = get_board_pos_screen_pos(pos, token.alliance) + ({BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2) */
+	/* 		arrow.target = get_board_pos_screen_pos(target_pos, opp_alliance) + {BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2 */
+	/* 		vfx: VFX */
+	/* 		vfx.done = false */
+	/* 		vfx.start_time = rl.GetTime() */
+	/* 		vfx.subtype = arrow */
+	/* 		sa.append(&g.active_vfx, vfx) */
+	/* 	} */
+
+	/* 	token.state = attack_anim_state */
+
+	/* case Attack_Animation: */
+	/* 	if sa.len(g.active_vfx) <= 0 { */
+	/* 		token.finished_action = true */
+
+	/* 		for target_pos in sa.slice(&variant.targets) { */
+
+
+	/* 			// TODO (rhoe) Hardcoded damage system, needs to be extended to a tagging system */
+	/* 			if target_token, target_token_ok := get_token_from_board_pos(target_pos); target_token_ok { */
+	/* 				target_token.life -= 1 */
+	/* 				/\* target_token.type = .None *\/ */
+	/* 			} */
+	/* 		} */
+
+	/* 		token.finished_action = true */
+	/* 	} */
+
+	/* } */
 }
 
 update_vfx :: proc() {
@@ -1335,7 +1444,10 @@ game_init :: proc() {
 
 	////////////////
 	// SETUP WAVES
-	level: Level
+	/* level: Level */
+	sa.append(&g.levels, Level{})
+	level := sa.get_ptr(&g.levels, 0)
+
 	for _ in 0..<MAX_WAVES {
 		wave: Wave
 
@@ -1364,7 +1476,7 @@ game_init :: proc() {
 		/* } */
 		sa.append(&level.waves, wave)
 	}
-	sa.append(&g.levels, level)
+	/* sa.append(&g.levels, level) */
 	g.current_level = 0
 	g.current_wave = 0
 
