@@ -634,8 +634,6 @@ update :: proc() {
 			fmt.println("space pressed")
 		}
 	case Doing_Actions_State:
-		fmt.println("DOING ACTIONS STATE")
-
 		if !state.initialized {
 			fmt.println("init player actions")
 			for x in 0..<BOARD_COLUMNS {
@@ -644,6 +642,7 @@ update :: proc() {
 						token.finished_action = false
 						token.state = Init_State{}
 
+						token.current_ability = 0
 						for &ability in sa.slice(&token.abilities) {
 							ability.state = Ability_Init_State{}
 						}
@@ -659,8 +658,6 @@ update :: proc() {
 		// get token board pos
 		token_pos, pos_ok := find_next_token(state.current_board_pos)
 		if !pos_ok {
-			
-
 
 			// TODO (rhoe) DO DAMAGE DIRECTLY ON TURN
 			/* for x in 0..<BOARD_COLUMNS { */
@@ -713,7 +710,6 @@ update :: proc() {
 
 
 	case Doing_Enemy_Actions_State:
-		fmt.println("DOING ENEMY ACTIONS STATE")
 		if !state.initialized {
 			fmt.println("init enemy actions")
 			for x in 0..<BOARD_COLUMNS {
@@ -721,6 +717,7 @@ update :: proc() {
 					if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid {
 						token.finished_action = false
 						token.state = Init_State{}
+						token.current_ability = 0
 						for &ability in sa.slice(&token.abilities) {
 							ability.state = Ability_Init_State{}
 						}
