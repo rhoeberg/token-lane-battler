@@ -977,52 +977,49 @@ check_if_token_has_targets :: proc(token: ^Board_Token, pos: Board_Pos) -> bool 
 	return false
 }
 
+target_ok :: proc(pos: Board_Pos) -> bool {
+	if token, ok := get_token_from_board_pos(pos); ok && token.type != .None && token.life > 0 {
+		return true
+	}
+
+	return false
+}
+
 // returns the board position of possible targets
 get_ability_targets :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Token) -> sa.Small_Array(BOARD_PLAYER_TILE_COUNT * 2, Board_Pos) {
 	result: sa.Small_Array(BOARD_PLAYER_TILE_COUNT*2, Board_Pos)
 
 	opp_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player
 
-	/* if .Hit_Frontline in token.attributes { */
-	/* 	sa.append(&result, get_frontline(pos.x, opp_alliance)) */
-	/* 	if .Sweep in token.attributes { */
-	/* 		// add front plus front-left and front-right token */
-	/* 		sa.append(&result, get_frontline(pos.x-1, opp_alliance)) */
-	/* 		sa.append(&result, get_frontline(pos.x+1, opp_alliance)) */
-	/* 	} */
-	/* } */
-
-
-	/* main_target_pos := Board_Pos{pos.x, FRONT_ROW, opp_alliance} */
 	if .Backline_Priority in ability.target {
-		if back_token, back_ok := get_token_from_board_pos({pos.x, BACK_ROW, opp_alliance}); back_ok && back_token.type != .None {
+		if target_ok({pos.x, BACK_ROW, opp_alliance}) {
 			sa.append(&result, Board_Pos{pos.x, BACK_ROW, opp_alliance})
 		} else {
 			// no backline try frontline instead
-			if front_token, front_ok := get_token_from_board_pos(Board_Pos{pos.x, FRONT_ROW, opp_alliance}); front_ok && front_token.type != .None {
+			if target_ok({pos.x, FRONT_ROW, opp_alliance}) {
 				sa.append(&result, Board_Pos{pos.x, FRONT_ROW, opp_alliance})
 			}
 		}
 	} else if .Frontline_Priority in ability.target {
-		if front_token, front_ok := get_token_from_board_pos({pos.x, FRONT_ROW, opp_alliance}); front_ok && front_token.type != .None {
+		if target_ok({pos.x, FRONT_ROW, opp_alliance}) {
 			sa.append(&result, Board_Pos{pos.x, FRONT_ROW, opp_alliance})
 		} else {
 			// no frontline try backline instead
-			if back_token, back_ok := get_token_from_board_pos({pos.x, BACK_ROW, opp_alliance}); back_ok && back_token.type != .None {
+			if target_ok({pos.x, BACK_ROW, opp_alliance}) {
 				sa.append(&result, Board_Pos{pos.x, BACK_ROW, opp_alliance})
 			}
 		}
 	} else {
 		if .Frontline in ability.target {
 			// add frontline unit
-			if front_token, front_ok := get_token_from_board_pos({pos.x, FRONT_ROW, opp_alliance}); front_ok && front_token.type != .None {
+			if target_ok({pos.x, FRONT_ROW, opp_alliance}) {
 				sa.append(&result, Board_Pos{pos.x, FRONT_ROW, opp_alliance})
 			}
 		}
 
 		if .Backline in ability.target {
 			// add frontline unit
-			if back_token, ok := get_token_from_board_pos({pos.x, BACK_ROW, opp_alliance}); ok && back_token.type != .None {
+			if target_ok({pos.x, BACK_ROW, opp_alliance}) {
 				sa.append(&result, Board_Pos{pos.x, BACK_ROW, opp_alliance})
 			}
 		}
@@ -1048,7 +1045,7 @@ get_ability_targets :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Tok
 	if .Self_Front in ability.target {
 		if pos.y != BACK_ROW {
 			front_pos := Board_Pos{pos.x, FRONT_ROW, token.alliance}
-			if front_token, ok := get_token_from_board_pos(front_pos); ok && front_token.type != .None {
+			if target_ok(front_pos) {
 				sa.append(&result, front_pos)
 			}
 		}
@@ -1057,7 +1054,7 @@ get_ability_targets :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Tok
 	if .Self_Behind in ability.target {
 		if pos.y != FRONT_ROW {
 			back_pos := Board_Pos{pos.x, BACK_ROW, token.alliance}
-			if back_token, ok := get_token_from_board_pos(back_pos); ok && back_token.type != .None {
+			if target_ok(back_pos) {
 				sa.append(&result, back_pos)
 			}
 		}
@@ -1066,12 +1063,12 @@ get_ability_targets :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Tok
 	if .Self_Adjacent in ability.target {
 		// TODO (rhoe) SHOULD CHECK IF THESE TOKENS ARE NOT NULL
 		if left, left_ok := get_pos_to_the_side(pos, -1); left_ok {
-			if left_token, ok := get_token_from_board_pos(left); ok && left_token.type != .None {
+			if target_ok(left) {
 				sa.append(&result, left)
 			}
 		}
 		if right, right_ok := get_pos_to_the_side(pos, -1); right_ok {
-			if right_token, ok := get_token_from_board_pos(right); ok && right_token.type != .None {
+			if target_ok(right) {
 				sa.append(&result, right)
 			}
 		}
