@@ -742,49 +742,10 @@ update_player_actions_state :: proc(state: ^Doing_Actions_State) {
 		g.prev_enemy_state = g.enemy_rows
 	}
 
-
-
-
 	// get token board pos
 	token_pos, pos_ok := find_next_token(state.current_board_pos)
 	if !pos_ok {
 		g.round_state = Doing_Enemy_Actions_State{}
-
-		// TODO (rhoe) DO DAMAGE DIRECTLY ON TURN
-		/* for x in 0..<BOARD_COLUMNS { */
-		/* 	for y in 0..<BOARD_ROWS { */
-		/* 		if token, token_valid := get_token_from_board_pos({x, y}, .Enemy); token_valid { */
-		/* 			if token.life <= 0 { */
-		/* 				token.type = .None */
-		/* 			} */
-		/* 		} */
-		/* 	} */
-		/* } */
-		// if rl.IsKeyPressed(.SPACE) {
-
-		// 	if round_end, result := check_round_end(); round_end {
-		// 		// round finished
-		// 		// check if game is over (one player has 0 or less lives)
-		// 		fmt.println("ROUND ENDED")
-
-		// 		if game_end, player_won := check_game_end(); game_end {
-		// 			if player_won {
-		// 				g.round_state = Player_Won_State{}
-		// 				break
-		// 			} else {
-		// 				g.round_state = Player_Lost_State{}
-		// 				break
-		// 			}
-		// 		}
-
-
-		// 		g.round_state = Round_End_State{result}
-		// 			fmt.println("ROUND END STATE")
-		// 	} else {
-		// 		g.round_state = Doing_Enemy_Actions_State{}
-		// 		fmt.println("DOING ENEMY ACTIONS STATE")
-		// 	}
-		// }
 
 		return
 	}
@@ -1014,102 +975,6 @@ get_round_winner :: proc() -> Round_End_Result {
 	}
 }
 
-// checks if round ends
-// also mutates game state and gives removes life from looser
-// returns true if round should end
-/* check_round_end :: proc() -> (bool, Round_End_Result) { */
-/* 	// check if game ended */
-/* 	// 1. check if enemy has more tokens */
-/* 	// 2. check if player has more tokens */
-/* 	enemy_has_tokens_left := false */
-/* 	enemy_has_targets := false */
-/* 	enemy_token_value := 0 */
-/* 	for x in 0..<BOARD_COLUMNS { */
-/* 		for y in 0..<BOARD_ROWS { */
-/* 			if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid { */
-/* 				if token.type != .None { */
-/* 					enemy_has_tokens_left = true */
-/* 					enemy_token_value += token.value */
-/* 					enemy_has_targets = check_if_token_has_targets(token, {x, y, .Enemy}) */
-/* 				} */
-/* 			} */
-/* 		} */
-/* 	} */
-
-/* 	player_has_tokens_left := false */
-/* 	player_has_targets := false */
-/* 	player_token_value := 0 */
-/* 	for x in 0..<BOARD_COLUMNS { */
-/* 		for y in 0..<BOARD_ROWS { */
-/* 			if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid { */
-/* 				if token.type != .None { */
-/* 					player_has_tokens_left = true */
-/* 					player_token_value += token.value */
-/* 					player_has_targets = check_if_token_has_targets(token, {x, y, .Player}) */
-/* 				} */
-/* 			} */
-/* 		} */
-/* 	} */
-
-/* 	if !enemy_has_tokens_left && player_has_tokens_left { */
-/* 		// player won */
-/* 		g.enemy_lives -= 1 */
-/* 		return true, .Player_Won */
-		
-/* 	} else if enemy_has_tokens_left && !player_has_tokens_left { */
-/* 		// enemy won */
-/* 		g.player_lives -= 1 */
-/* 		return true, .Enemy_Won */
-
-/* 	} else if !enemy_has_tokens_left && !player_has_tokens_left { */
-/* 		// both players lost */
-/* 		g.player_lives -= 1 */
-/* 		g.enemy_lives -= 1 */
-/* 		return true, .Draw */
-
-/* 	} else if enemy_has_tokens_left && player_has_tokens_left { */
-/* 		if !enemy_has_targets && !player_has_targets { */
-/* 			// count token value and decide winner */
-/* 			// player wins if equal value */
-/* 			if player_token_value >= enemy_token_value { */
-/* 				g.enemy_lives -= 1 */
-/* 				return true, .Player_Won */
-/* 			} else { */
-/* 				g.player_lives -= 1 */
-/* 				return true, .Enemy_Won */
-/* 			} */
-/* 			return true, .Draw */
-/* 		} */
-/* 	} */
-
-/* 	return false, {} */
-/* } */
-
-/* get_token_counter_pos :: proc(pos: Board_Pos) -> Board_Pos { */
-/* 	new_pos: Board_Pos */
-/* 	new_pos.x = BOARD_COLUMNS - pos.x - 1 */
-/* 	new_pos.y = BOARD_ROWS - pos.y */
-/* 	return new_pos */
-/* } */
-
-/* get_backline :: proc(x: int, alliance: Alliance) -> Board_Pos { */
-/* 	return {x, 1} */
-/* 	/\* if alliance == .Player { *\/ */
-/* 	/\* 	return {x, 1} *\/ */
-/* 	/\* } else { *\/ */
-/* 	/\* 	return {x, 0} *\/ */
-/* 	/\* } *\/ */
-/* } */
-
-/* get_frontline :: proc(x: int, alliance: Alliance) -> Board_Pos { */
-/* 	return {x, 0} */
-/* 	/\* if alliance == .Player { *\/ */
-/* 	/\* 	return {x, 0} *\/ */
-/* 	/\* } else { *\/ */
-/* 	/\* 	return {x, 1} *\/ */
-/* 	/\* } *\/ */
-/* } */
-
 get_pos_to_the_side :: proc(pos: Board_Pos, offset: int) -> (Board_Pos, bool) {
 	result := Board_Pos{pos.x + offset, pos.y, pos.alliance}
 	if result.x < 0 || result.x > BOARD_COLUMNS-1 {
@@ -1118,45 +983,6 @@ get_pos_to_the_side :: proc(pos: Board_Pos, offset: int) -> (Board_Pos, bool) {
 
 	return result, true
 }
-
-/* // returns the board position of possible targets */
-/* get_targets :: proc(token: ^Board_Token, pos: Board_Pos) -> sa.Small_Array(BOARD_PLAYER_TILE_COUNT, Board_Pos) { */
-/* 	result: sa.Small_Array(BOARD_PLAYER_TILE_COUNT, Board_Pos) */
-
-/* 	opp_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player */
-
-/* 	/\* if .Hit_Frontline in token.attributes { *\/ */
-/* 	/\* 	sa.append(&result, get_frontline(pos.x, opp_alliance)) *\/ */
-/* 	/\* 	if .Sweep in token.attributes { *\/ */
-/* 	/\* 		// add front plus front-left and front-right token *\/ */
-/* 	/\* 		sa.append(&result, get_frontline(pos.x-1, opp_alliance)) *\/ */
-/* 	/\* 		sa.append(&result, get_frontline(pos.x+1, opp_alliance)) *\/ */
-/* 	/\* 	} *\/ */
-/* 	/\* } *\/ */
-
-/* 	main_target_pos := Board_Pos{pos.x, FRONT_ROW, opp_alliance} */
-
-/* 	if .Hit_Backline in token.attributes { */
-/* 		if back_token, back_ok := get_token_from_board_pos({pos.x, BACK_ROW, opp_alliance}); back_ok && back_token.type != .None { */
-/* 			main_target_pos = {pos.x, BACK_ROW, opp_alliance} */
-/* 			fmt.println("TARGETTING BACKLINE: ", main_target_pos) */
-/* 		} else { */
-/* 			fmt.println("NO BACKLINE TARGET, FRONTLINE: ", main_target_pos) */
-/* 		} */
-/* 	}  */
-
-/* 	sa.append(&result, main_target_pos) */
-/* 	if .Sweep in token.attributes { */
-/* 		if left, left_ok := get_pos_to_the_side(main_target_pos, -1); left_ok { */
-/* 			sa.append(&result, left) */
-/* 		} */
-/* 		if right, right_ok := get_pos_to_the_side(main_target_pos, 1); right_ok { */
-/* 			sa.append(&result, right) */
-/* 		} */
-/* 	} */
-
-/* 	return result */
-/* } */
 
 check_if_token_has_targets :: proc(token: ^Board_Token, pos: Board_Pos) -> bool {
 	for &ability in sa.slice(&token.abilities) {
