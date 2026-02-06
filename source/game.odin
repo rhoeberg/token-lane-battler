@@ -161,7 +161,8 @@ Board_Token :: struct {
 	finished_action: bool,
 	attributes: Token_Attribute_Set,
 
-	life: i16,
+	max_life: i16,
+	current_life: i16,
 	value: int, // could value and food cost be combined?
 	food_cost: int,
 
@@ -268,9 +269,13 @@ Game_Memory :: struct {
 	current_level: int,
 	current_wave: int,
 
+	current_turn: int,
+
 	/* doing_action_start: f64, */
 	/* doing_action_current_board_pos: Board_Pos, */
 	/* doing_action_action_initialized: bool, */
+	prev_player_state: [BOARD_COLUMNS][BOARD_ROWS]Board_Token,
+	prev_enemy_state: [BOARD_COLUMNS][BOARD_ROWS]Board_Token,
 
 	active_vfx: sa.Small_Array(MAX_ACTIVE_VFX, VFX),
 	/* archer_arrow_active: bool, */
@@ -287,7 +292,7 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 	token: Board_Token
 	token.type = type
 	token.alliance = alliance
-	token.life = 1
+	token.max_life = 1
 	token.value = 1
 	token.food_cost = 1
 	token.backliner = false
@@ -295,7 +300,7 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 	case .None:
 	case .Archer:
 		token.texture_name = .Archer
-		token.life = 1
+		token.max_life = 1
 		ability: Ability
 		ability.effect = .Damage
 		ability.target = {.Backline_Priority}
@@ -304,7 +309,7 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 		token.backliner = true
 	case .Ranger:
 		token.texture_name = .Archer
-		token.life = 2
+		token.max_life = 2
 		ability: Ability
 		ability.effect = .Damage
 		ability.target = {.Backline_Priority}
@@ -312,7 +317,7 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 		/* token.attributes = {.Hit_Backline} */
 		token.backliner = true
 	case .Swordsman:
-		token.life = 2
+		token.max_life = 2
 		token.value = 2
 		token.food_cost = 2
 		token.texture_name = .Test_Face
@@ -322,7 +327,7 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 		ability.target = {.Frontline}
 		sa.append(&token.abilities, ability)
 	case .Cleaver:
-		token.life = 1
+		token.max_life = 1
 		token.value = 2
 		token.food_cost = 2
 		token.texture_name = .Cleaver
@@ -332,14 +337,26 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 		ability.target = {.Frontline, .Sweep}
 		sa.append(&token.abilities, ability)
 	case .Healer:
+		token.texture_name = .Healer
+		token.value = 1
+		token.food_cost = 1
+		token.backliner = true
+
+		ability: Ability
+		ability.effect = .Heal
+		ability.target = {.Self_Adjacent, .Self_Front}
+		sa.append(&token.abilities, ability)
+
 		
 	case .Rats:
-		token.life = 1
+		token.max_life = 1
 		token.value = 0
 		token.food_cost = 2
 		token.texture_name = .Rats
 		token.attributes = {.Unplayable}
 	}
+
+	token.current_life = token.max_life
 
 	return token
 }
@@ -500,6 +517,7 @@ update :: proc() {
 
 		g.player.food = PLAYER_ROUND_FOOD
 		g.round_state = Getting_Tokens_State{}
+		g.current_turn = 0
 
 
 	case Getting_Tokens_State:
@@ -655,9 +673,36 @@ update :: proc() {
 			state.initialized = true
 		}
 
+		if g.current_turn != 0 {
+			fmt.println("check round end")
+			// compare to previous state
+			if g.player_rows == g.prev_player_state && g.enemy_rows == g.prev_enemy_state {
+				// nothing happened
+				if game_end, player_won := check_game_end(); game_end {
+					if player_won {
+						g.round_state = Player_Won_State{}
+						break
+					} else {
+						g.round_state = Player_Lost_State{}
+						break
+					}
+				}
+
+				result := get_round_winner()
+				g.round_state = Round_End_State{result}
+				break
+			}
+
+
+			g.prev_player_state = g.player_rows
+			g.prev_enemy_state = g.enemy_rows
+		}
+
+
 		// get token board pos
 		token_pos, pos_ok := find_next_token(state.current_board_pos)
 		if !pos_ok {
+			g.round_state = Doing_Enemy_Actions_State{}
 
 			// TODO (rhoe) DO DAMAGE DIRECTLY ON TURN
 			/* for x in 0..<BOARD_COLUMNS { */
@@ -669,32 +714,32 @@ update :: proc() {
 			/* 		} */
 			/* 	} */
 			/* } */
-			if rl.IsKeyPressed(.SPACE) {
+			// if rl.IsKeyPressed(.SPACE) {
 
-				if round_end, result := check_round_end(); round_end {
-					// round finished
-					// check if game is over (one player has 0 or less lives)
-					fmt.println("ROUND ENDED")
+			// 	if round_end, result := check_round_end(); round_end {
+			// 		// round finished
+			// 		// check if game is over (one player has 0 or less lives)
+			// 		fmt.println("ROUND ENDED")
 
-					if game_end, player_won := check_game_end(); game_end {
-						if player_won {
-							g.round_state = Player_Won_State{}
-							break
-						} else {
-							g.round_state = Player_Lost_State{}
-							break
-						}
-					}
+			// 		if game_end, player_won := check_game_end(); game_end {
+			// 			if player_won {
+			// 				g.round_state = Player_Won_State{}
+			// 				break
+			// 			} else {
+			// 				g.round_state = Player_Lost_State{}
+			// 				break
+			// 			}
+			// 		}
 
 
-					g.round_state = Round_End_State{result}
-						fmt.println("ROUND END STATE")
-				} else {
-					g.round_state = Doing_Enemy_Actions_State{}
-					fmt.println("DOING ENEMY ACTIONS STATE")
-				}
+			// 		g.round_state = Round_End_State{result}
+			// 			fmt.println("ROUND END STATE")
+			// 	} else {
+			// 		g.round_state = Doing_Enemy_Actions_State{}
+			// 		fmt.println("DOING ENEMY ACTIONS STATE")
+			// 	}
+			// }
 
-			}
 			break
 		}
 
@@ -771,8 +816,10 @@ update :: proc() {
 			for x in 0..<BOARD_COLUMNS {
 				for y in 0..<BOARD_ROWS {
 					if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid && token.type != .None {
-						if token.life <= 0 {
+						if token.current_life <= 0 {
 							token.type = .None
+						} else if token.current_life > token.max_life {
+							token.current_life = token.max_life
 						}
 					}
 				}
@@ -782,18 +829,46 @@ update :: proc() {
 			for x in 0..<BOARD_COLUMNS {
 				for y in 0..<BOARD_ROWS {
 					if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid && token.type != .None {
-						if token.life <= 0 {
-							fmt.println("ENEMY DIED:", Board_Pos{x, y, .Enemy})
+						if token.current_life <= 0 {
 							token.type = .None
+						} else if token.current_life > token.max_life {
+							token.current_life = token.max_life
 						}
 					}
 				}
 			}
 
+
+
 			state.done_resolving = true
 		}
 
 		if rl.IsKeyPressed(.SPACE) {
+			// if round_end, result := check_round_end(); round_end {
+			// 	// round finished
+			// 	// check if game is over (one player has 0 or less lives)
+			// 	fmt.println("ROUND ENDED")
+
+			// 	if game_end, player_won := check_game_end(); game_end {
+			// 		if player_won {
+			// 			g.round_state = Player_Won_State{}
+			// 			break
+			// 		} else {
+			// 			g.round_state = Player_Lost_State{}
+			// 			break
+			// 		}
+			// 	}
+
+
+			// 	g.round_state = Round_End_State{result}
+			// 	fmt.println("ROUND END STATE")
+			// } else {
+			// 	// g.round_state = Doing_Enemy_Actions_State{}
+			// 	g.round_state = Doing_Actions_State{}
+			// 	// fmt.println("DOING ENEMY ACTIONS STATE")
+			// }
+
+			g.current_turn += 1
 			g.round_state = Doing_Actions_State{}
 		}
 
@@ -822,6 +897,38 @@ check_game_end :: proc() -> (game_end:bool, player_won:bool) {
 	}
 
 	return false, false
+}
+
+get_round_winner :: proc() -> Round_End_Result {
+	enemy_token_value := 0
+	for x in 0..<BOARD_COLUMNS {
+		for y in 0..<BOARD_ROWS {
+			if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid {
+				if token.type != .None {
+					enemy_token_value += token.value
+				}
+			}
+		}
+	}
+
+	player_token_value := 0
+	for x in 0..<BOARD_COLUMNS {
+		for y in 0..<BOARD_ROWS {
+			if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid {
+				if token.type != .None {
+					player_token_value += token.value
+				}
+			}
+		}
+	}
+
+	if player_token_value == enemy_token_value {
+		return .Draw
+	} else if player_token_value > enemy_token_value {
+		return .Player_Won
+	} else {
+		return .Enemy_Won
+	}
 }
 
 // checks if round ends
@@ -970,15 +1077,17 @@ get_pos_to_the_side :: proc(pos: Board_Pos, offset: int) -> (Board_Pos, bool) {
 
 check_if_token_has_targets :: proc(token: ^Board_Token, pos: Board_Pos) -> bool {
 	for &ability in sa.slice(&token.abilities) {
-		targets := get_ability_targets(&ability, pos, token)
-		if sa.len(targets) > 0 do return true
+		if ability.effect != .Heal {
+			targets := get_ability_targets(&ability, pos, token)
+			if sa.len(targets) > 0 do return true
+		}
 	}
 
 	return false
 }
 
 target_ok :: proc(pos: Board_Pos) -> bool {
-	if token, ok := get_token_from_board_pos(pos); ok && token.type != .None && token.life > 0 {
+	if token, ok := get_token_from_board_pos(pos); ok && token.type != .None {
 		return true
 	}
 
@@ -1043,7 +1152,7 @@ get_ability_targets :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Tok
 	}
 
 	if .Self_Front in ability.target {
-		if pos.y != BACK_ROW {
+		if pos.y == BACK_ROW {
 			front_pos := Board_Pos{pos.x, FRONT_ROW, token.alliance}
 			if target_ok(front_pos) {
 				sa.append(&result, front_pos)
@@ -1052,7 +1161,7 @@ get_ability_targets :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Tok
 	}
 
 	if .Self_Behind in ability.target {
-		if pos.y != FRONT_ROW {
+		if pos.y == FRONT_ROW {
 			back_pos := Board_Pos{pos.x, BACK_ROW, token.alliance}
 			if target_ok(back_pos) {
 				sa.append(&result, back_pos)
@@ -1067,7 +1176,7 @@ get_ability_targets :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Tok
 				sa.append(&result, left)
 			}
 		}
-		if right, right_ok := get_pos_to_the_side(pos, -1); right_ok {
+		if right, right_ok := get_pos_to_the_side(pos, 1); right_ok {
 			if target_ok(right) {
 				sa.append(&result, right)
 			}
@@ -1125,7 +1234,12 @@ do_token_ability :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Token,
 		// deal damage etc..
 		for target_pos in sa.slice(&ability.current_targets) {
 			if target_token, target_token_ok := get_token_from_board_pos(target_pos); target_token_ok && target_token.type != .None {
-				target_token.life -= 1
+				switch ability.effect {
+				case .Damage:
+					target_token.current_life -= 1
+				case .Heal:
+					target_token.current_life += 1
+				}
 			}
 			
 		}
@@ -1270,7 +1384,7 @@ draw :: proc() {
 			rect.height = BOARD_TILE_SIZE
 			if board_token.type != .None {
 				rl.DrawTexturePro(g.atlas_texture, atlas_textures[board_token.texture_name].rect, rect, {}, 0, rl.WHITE)
-				rl.DrawText(rl.TextFormat("%d", board_token.life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
+				rl.DrawText(rl.TextFormat("%d", board_token.current_life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
 			}
 
 
@@ -1298,7 +1412,7 @@ draw :: proc() {
 			rect.height = BOARD_TILE_SIZE
 			if board_token.type != .None {
 				rl.DrawTexturePro(g.atlas_texture, atlas_textures[board_token.texture_name].rect, rect, {}, 0, rl.WHITE)
-				rl.DrawText(rl.TextFormat("%d", board_token.life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
+				rl.DrawText(rl.TextFormat("%d", board_token.current_life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
 			}
 
 			/* rl.DrawText(rl.TextFormat("(%d, %d)", x_pos, y_pos), i32(rect.x), i32(rect.y), 14, rl.GREEN) */
@@ -1442,7 +1556,13 @@ game_init :: proc() {
 	sa.append(&g.levels, Level{})
 	level := sa.get_ptr(&g.levels, 0)
 
-	for _ in 0..<MAX_WAVES {
+	first_wave: Wave
+	first_wave.enemy_rows[1][BACK_ROW] = create_board_token(.Archer, .Enemy)
+	first_wave.enemy_rows[2][BACK_ROW] = create_board_token(.Healer, .Enemy)
+	sa.append(&level.waves, first_wave)
+
+
+	for _ in 0..<MAX_WAVES-1 {
 		wave: Wave
 
 		wave_amount := rl.GetRandomValue(3, 6)
