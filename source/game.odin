@@ -85,6 +85,7 @@ Board_Token_Type :: enum {
 	Swordsman,
 	Cleaver,
 	Healer,
+	Bannerman,
 	Rats, // eats food but does nothing
 }
 
@@ -115,6 +116,8 @@ Ability :: struct {
 	target: Ability_Target_Set,
 	effect: Ability_Effect,
 	state: Ability_State,
+	power: int,
+	color: rl.Color,
 	current_targets: sa.Small_Array(BOARD_PLAYER_TILE_COUNT*2, Board_Pos),
 }
 
@@ -139,6 +142,7 @@ Ability_Target_Attribute :: enum {
 Ability_Effect :: enum {
 	Damage,
 	Heal,
+	Empower,
 }
 
 Token_Attributes :: enum {
@@ -171,8 +175,12 @@ Board_Token :: struct {
 	backliner: bool,
 
 	// ability
-	abilities: sa.Small_Array(TOKEN_MAX_ABILITIES, Ability),
+	pre_battle_abilities: sa.Small_Array(TOKEN_MAX_ABILITIES, Ability), // happens just once before autobattle start
+	abilities: sa.Small_Array(TOKEN_MAX_ABILITIES, Ability), // happens every turn 
 	current_ability: int,
+
+	// buf
+	empowered_amount: int,
 }
 
 Player_State :: struct {
@@ -191,13 +199,19 @@ Player_State :: struct {
 Start_Round_State :: struct {}
 Getting_Tokens_State :: struct {}
 Playing_Tokens_State :: struct {}
-Doing_Actions_State :: struct {
+Pre_Battle_Abilities_State :: struct {
+	initialized: bool,
+	current_board_pos: Board_Pos,
+	start: f64,
+	alliance: Alliance,
+}
+Player_Actions_State :: struct {
 	initialized: bool,
 	start: f64,
 	current_board_pos: Board_Pos,
 	/* doing_action_action_initialized: bool, */
 }
-Doing_Enemy_Actions_State :: struct {
+Enemy_Actions_State :: struct {
 	initialized: bool,
 	start: f64,
 	current_board_pos: Board_Pos,
@@ -221,8 +235,9 @@ Game_Round_State :: union {
 	Start_Round_State,
 	Getting_Tokens_State,
 	Playing_Tokens_State,
-	Doing_Actions_State,
-	Doing_Enemy_Actions_State,
+	Pre_Battle_Abilities_State,
+	Player_Actions_State,
+	Enemy_Actions_State,
 	Resolve_Damage_State,
 	Round_End_State,
 	Player_Won_State,
@@ -241,6 +256,7 @@ Sword_VFX :: struct {
 VFX :: struct {
 	start_time: f64,
 	done: bool,
+	color: rl.Color,
 	subtype: union {
 		Arrow_VFX,
 		Sword_VFX,
@@ -304,6 +320,8 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 		token.max_life = 1
 		ability: Ability
 		ability.effect = .Damage
+		ability.power = 1
+		ability.color = rl.RED
 		ability.target = {.Backline_Priority}
 		sa.append(&token.abilities, ability)
 		/* token.attributes = {.Hit_Backline} */
@@ -313,6 +331,8 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 		token.max_life = 2
 		ability: Ability
 		ability.effect = .Damage
+		ability.power = 1
+		ability.color = rl.RED
 		ability.target = {.Backline_Priority}
 		sa.append(&token.abilities, ability)
 		/* token.attributes = {.Hit_Backline} */
@@ -325,6 +345,8 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 		/* token.attributes = {.Hit_Frontline} */
 		ability: Ability
 		ability.effect = .Damage
+		ability.power = 1
+		ability.color = rl.RED
 		ability.target = {.Frontline}
 		sa.append(&token.abilities, ability)
 	case .Cleaver:
@@ -335,6 +357,8 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 		/* token.attributes = {.Sweep} */
 		ability: Ability
 		ability.effect = .Damage
+		ability.power = 1
+		ability.color = rl.RED
 		ability.target = {.Frontline, .Sweep}
 		sa.append(&token.abilities, ability)
 	case .Healer:
@@ -345,9 +369,23 @@ create_board_token :: proc(type: Board_Token_Type, alliance: Alliance) -> Board_
 
 		ability: Ability
 		ability.effect = .Heal
+		ability.power = 1
+		ability.color = rl.GREEN
 		ability.target = {.Self_Adjacent, .Self_Front}
 		sa.append(&token.abilities, ability)
 
+	case .Bannerman:
+		token.texture_name = .Bannerman
+		token.value = 1
+		token.food_cost = 1
+		token.backliner = true
+
+		ability: Ability
+		ability.effect = .Empower
+		ability.power = 1
+		ability.color = rl.BLUE
+		ability.target = {.Self_Adjacent, .Self_Front}
+		sa.append(&token.pre_battle_abilities, ability)
 		
 	case .Rats:
 		token.max_life = 1
@@ -504,6 +542,7 @@ start_round :: proc() {
 	sa.clear(&g.player.current_hand)
 
 	sa.append(&g.player.current_hand, create_board_token(.Swordsman, .Player))
+	sa.append(&g.player.current_hand, create_board_token(.Bannerman, .Player))
 
 
 	// setup wave
@@ -656,10 +695,12 @@ update_playing_tokens :: proc() {
 	/////////////////
 	// HARDCODED END OF PLAYING TOKENS BUTTON
 	if rl.IsKeyPressed(.SPACE) {
-		doing_actions: Doing_Actions_State
-		doing_actions.initialized = false
-		g.round_state = doing_actions
-		fmt.println("space pressed")
+		/* doing_actions: Pre */
+		/* doing_actions.initialized = false */
+		pre_battle_state: Pre_Battle_Abilities_State
+		pre_battle_state.alliance = .Player
+		pre_battle_state.initialized = false
+		g.round_state = pre_battle_state
 	}
 }
 
@@ -687,7 +728,65 @@ compare_board_state :: proc(a, b: [BOARD_COLUMNS][BOARD_ROWS]Board_Token) -> boo
 	return true
 }
 
-update_player_actions_state :: proc(state: ^Doing_Actions_State) {
+update_pre_battle_abilities :: proc(state: ^Pre_Battle_Abilities_State) {
+	if !state.initialized {
+		fmt.println("PRE BATTLE for: ", state.alliance)
+		for x in 0..<BOARD_COLUMNS {
+			for y in 0..<BOARD_ROWS {
+				if token, token_valid := get_token_from_board_pos({x, y, state.alliance}); token_valid {
+					token.finished_action = false
+					token.state = Init_State{}
+
+					token.current_ability = 0
+					for &ability in sa.slice(&token.pre_battle_abilities) {
+						ability.state = Ability_Init_State{}
+					}
+				}
+			}
+		}
+
+		state.start = rl.GetTime()
+		state.current_board_pos = {0, 0, .Player}
+		state.initialized = true
+	}
+
+	// get token board pos
+	token_pos, pos_ok := find_next_token(state.current_board_pos)
+	if !pos_ok {
+		if state.alliance == .Player {
+			state.alliance = .Enemy
+			state.initialized = false
+			return
+		}
+
+		g.round_state = Player_Actions_State{}
+		return
+	}
+
+	// get token pointer
+	current_token, token_ok := get_token_from_board_pos(token_pos)
+	if !token_ok || current_token.finished_action {
+		state.current_board_pos = increment_board_position(state.current_board_pos)
+		return
+	}
+
+	if !current_token.finished_action {
+
+		if sa.len(current_token.pre_battle_abilities) == 0 {
+			current_token.finished_action = true
+			return 
+		}
+
+		if do_token_ability(sa.get_ptr(&current_token.pre_battle_abilities, current_token.current_ability), token_pos, current_token, state.start) {
+			current_token.current_ability += 1
+			if current_token.current_ability >= sa.len(current_token.pre_battle_abilities)-1 {
+				current_token.finished_action = true
+			}
+		}
+	}
+}
+
+update_player_actions_state :: proc(state: ^Player_Actions_State) {
 	if !state.initialized {
 		fmt.println("init player actions")
 		for x in 0..<BOARD_COLUMNS {
@@ -708,44 +807,12 @@ update_player_actions_state :: proc(state: ^Doing_Actions_State) {
 		state.current_board_pos = {0, 0, .Player}
 		state.initialized = true
 
-		if g.current_turn != 0 {
-			fmt.println("check round end")
-			// compare to previous state
-
-			player_state_same := compare_board_state(g.player_rows, g.prev_player_state)
-			/* fmt.println("PLAYER STATE CHANGED:", player_state_same) */
-			enemy_state_same := compare_board_state(g.enemy_rows, g.prev_enemy_state)
-			/* fmt.println("ENEMY STATE CHANGED:", enemy_state_same) */
-			if player_state_same && enemy_state_same {
-
-
-				// nothing happened
-				if game_end, player_won := check_game_end(); game_end {
-					if player_won {
-						g.round_state = Player_Won_State{}
-						g.enemy_lives -= 1
-						return
-					} else {
-						g.round_state = Player_Lost_State{}
-						g.player_lives -= 1
-						return
-					}
-				}
-
-				result := get_round_winner()
-				g.round_state = Round_End_State{result}
-				return
-			}
-
-		}
-		g.prev_player_state = g.player_rows
-		g.prev_enemy_state = g.enemy_rows
 	}
 
 	// get token board pos
 	token_pos, pos_ok := find_next_token(state.current_board_pos)
 	if !pos_ok {
-		g.round_state = Doing_Enemy_Actions_State{}
+		g.round_state = Enemy_Actions_State{}
 
 		return
 	}
@@ -760,10 +827,9 @@ update_player_actions_state :: proc(state: ^Doing_Actions_State) {
 	// do action
 	do_token_action(current_token, token_pos, state.start)
 
-
 }
 
-update_enemy_actions_state :: proc(state: ^Doing_Enemy_Actions_State) {
+update_enemy_actions_state :: proc(state: ^Enemy_Actions_State) {
 	if !state.initialized {
 		fmt.println("init enemy actions")
 		for x in 0..<BOARD_COLUMNS {
@@ -877,8 +943,41 @@ resolve_damage :: proc(state: ^Resolve_Damage_State) {
 		// 	// fmt.println("DOING ENEMY ACTIONS STATE")
 		// }
 
+
+		if g.current_turn != 0 {
+			fmt.println("check round end")
+			// compare to previous state
+
+			player_state_same := compare_board_state(g.player_rows, g.prev_player_state)
+			/* fmt.println("PLAYER STATE CHANGED:", player_state_same) */
+			enemy_state_same := compare_board_state(g.enemy_rows, g.prev_enemy_state)
+			/* fmt.println("ENEMY STATE CHANGED:", enemy_state_same) */
+			if player_state_same && enemy_state_same {
+
+
+				// nothing happened
+				if game_end, player_won := check_game_end(); game_end {
+					if player_won {
+						g.round_state = Player_Won_State{}
+						g.enemy_lives -= 1
+						return
+					} else {
+						g.round_state = Player_Lost_State{}
+						g.player_lives -= 1
+						return
+					}
+				}
+
+				result := get_round_winner()
+				g.round_state = Round_End_State{result}
+				return
+			}
+
+		}
+		g.prev_player_state = g.player_rows
+		g.prev_enemy_state = g.enemy_rows
 		g.current_turn += 1
-		g.round_state = Doing_Actions_State{}
+		g.round_state = Player_Actions_State{}
 	}
 }
 
@@ -903,9 +1002,11 @@ update :: proc() {
 		getting_tokens()
 	case Playing_Tokens_State:
 		update_playing_tokens()
-	case Doing_Actions_State:
+	case Pre_Battle_Abilities_State:
+		update_pre_battle_abilities(&state)
+	case Player_Actions_State:
 		update_player_actions_state(&state)
-	case Doing_Enemy_Actions_State:
+	case Enemy_Actions_State:
 		update_enemy_actions_state(&state)
 	case Resolve_Damage_State:
 		resolve_damage(&state)
@@ -1126,6 +1227,7 @@ do_token_ability :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Token,
 			vfx.done = false
 			vfx.start_time = rl.GetTime()
 			vfx.subtype = arrow
+			vfx.color = ability.color
 			sa.append(&g.active_vfx, vfx)
 		}
 
@@ -1145,9 +1247,11 @@ do_token_ability :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Token,
 			if target_token, target_token_ok := get_token_from_board_pos(target_pos); target_token_ok && target_token.type != .None {
 				switch ability.effect {
 				case .Damage:
-					target_token.current_life -= 1
+					target_token.current_life -= i16(ability.power + token.empowered_amount)
 				case .Heal:
-					target_token.current_life += 1
+					target_token.current_life += i16(ability.power + token.empowered_amount)
+				case .Empower:
+					target_token.empowered_amount += ability.power + token.empowered_amount
 				}
 			}
 			
@@ -1176,57 +1280,6 @@ do_token_action :: proc(token: ^Board_Token, pos: Board_Pos, start_time: f64) {
 			token.finished_action = true
 		}
 	}
-
-
-	/* if token.finished_action do return */
-
-	/* #partial switch &variant in token.state { */
-	/* case Init_State: */
-	/* 	// handle token init targetting */
-
-	/* 	attack_anim_state: Attack_Animation */
-	/* 	attack_anim_state.targets = get_targets(token, pos) */
-
-	/* 	opp_alliance := token.alliance == .Player ? Alliance.Enemy : Alliance.Player */
-	/* 	sa.clear(&g.active_vfx) */
-	/* 	for target_pos in sa.slice(&attack_anim_state.targets) { */
-	/* 		fmt.println("found target:", target_pos) */
-
-	/* 		// TODO (rhoe) hardcoding the arrow anim for all units */
-	/* 		// --- */
-	/* 		// later we probably want to be able to configure the animation for each token */
-	/* 		// with a more generalized animation system */
-	/* 		arrow: Arrow_VFX */
-	/* 		arrow.t = 0 */
-	/* 		arrow.start = get_board_pos_screen_pos(pos, token.alliance) + ({BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2) */
-	/* 		arrow.target = get_board_pos_screen_pos(target_pos, opp_alliance) + {BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2 */
-	/* 		vfx: VFX */
-	/* 		vfx.done = false */
-	/* 		vfx.start_time = rl.GetTime() */
-	/* 		vfx.subtype = arrow */
-	/* 		sa.append(&g.active_vfx, vfx) */
-	/* 	} */
-
-	/* 	token.state = attack_anim_state */
-
-	/* case Attack_Animation: */
-	/* 	if sa.len(g.active_vfx) <= 0 { */
-	/* 		token.finished_action = true */
-
-	/* 		for target_pos in sa.slice(&variant.targets) { */
-
-
-	/* 			// TODO (rhoe) Hardcoded damage system, needs to be extended to a tagging system */
-	/* 			if target_token, target_token_ok := get_token_from_board_pos(target_pos); target_token_ok { */
-	/* 				target_token.life -= 1 */
-	/* 				/\* target_token.type = .None *\/ */
-	/* 			} */
-	/* 		} */
-
-	/* 		token.finished_action = true */
-	/* 	} */
-
-	/* } */
 }
 
 update_vfx :: proc() {
@@ -1256,7 +1309,7 @@ draw_vfx :: proc() {
 		switch sub in fx.subtype {
 		case Arrow_VFX:
 			pos := linalg.lerp(sub.start, sub.target, sub.t)
-			rl.DrawCircle(i32(pos.x), i32(pos.y), 15, rl.RED)
+			rl.DrawCircle(i32(pos.x), i32(pos.y), 15, fx.color)
 
 		case Sword_VFX:
 		}
