@@ -45,6 +45,7 @@ BOARD_TILE_SIZE :: 100
 BOARD_OFFSET_Y :: 50
 PLAYER_HAND_Y_START :: 500
 PLAYER_HAND_X_START :: 100
+PLAYER_HAND_CARD_SPACING :: 20
 PLAYER_ROW_OFFSET_Y :: (BOARD_ROWS * BOARD_TILE_SIZE) + BOARD_OFFSET_Y
 BAG_POS_Y :: 600
 BAG_POS_X :: 1000
@@ -460,7 +461,6 @@ get_board_pos_screen_pos :: proc(pos: Board_Pos) -> Vec2 {
 
 // searches for next token which is:
 // - not type .None
-// - matching alliance
 // - not finished_action
 find_next_token :: proc(start: Board_Pos) -> (Board_Pos, bool) {
 	next_pos := start
@@ -482,6 +482,454 @@ find_next_token :: proc(start: Board_Pos) -> (Board_Pos, bool) {
 
 }
 
+start_round :: proc() {
+	fmt.println("STARTING NEW ROUND")
+
+	// reset board
+	for x in 0..<BOARD_COLUMNS {
+		for y in 0..<BOARD_ROWS {
+			if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid {
+				token.type = .None
+			}
+		}
+	}
+	for x in 0..<BOARD_COLUMNS {
+		for y in 0..<BOARD_ROWS {
+			if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid {
+				token.type = .None
+			}
+		}
+	}
+
+	sa.clear(&g.player.current_hand)
+
+	sa.append(&g.player.current_hand, create_board_token(.Swordsman, .Player))
+
+
+	// setup wave
+	level := sa.get_ptr(&g.levels, g.current_level)
+	wave := sa.get_ptr(&level.waves, g.current_wave)
+	g.enemy_rows = wave.enemy_rows
+
+	g.player.food = PLAYER_ROUND_FOOD
+	g.round_state = Getting_Tokens_State{}
+	g.current_turn = 0
+}
+
+getting_tokens :: proc() {
+
+	// 1. click bag to draw token
+	// 2. get token and consume food cost
+	// 3. check if we used too much food
+	// 4. play token
+	// 5. player ends or repeats
+	mouse := rl.GetMousePosition()
+	if rl.CheckCollisionPointCircle(mouse, {BAG_POS_X, BAG_POS_Y}, BAG_RADIUS) {
+		if rl.IsMouseButtonReleased(.LEFT) {
+
+			// check if there is more tokens left
+			if sa.len(g.player.bag) <= 0 {
+				g.round_state = Player_Lost_State{}
+				return
+			} 
+
+			fmt.println("PRESSED BAG!")
+			rnd := rl.GetRandomValue(0, i32(sa.len(g.player.bag)-1))
+			token := sa.get(g.player.bag, int(rnd))
+			sa.unordered_remove(&g.player.bag, int(rnd))
+			sa.append(&g.player.current_hand, token)
+			g.player.food -= token.food_cost
+			if g.player.food < 0 {
+				g.player_lives -= 1
+				/* g.round_state = End_Round_State{} */
+				g.round_state = Round_End_State{.Enemy_Won}
+				return
+			} else if g.player.food == 0 {
+				g.round_state = Playing_Tokens_State{}
+				return
+			}
+
+
+		}
+	}
+
+
+	
+	if rl.CheckCollisionPointCircle(mouse, {END_DRAWING_BUTTON_POS_X, END_DRAWING_BUTTON_POS_Y}, END_DRAWING_BUTTON_RADIUS) {
+		if rl.IsMouseButtonReleased(.LEFT) {
+			fmt.println("END DRAWING")
+			g.round_state = Playing_Tokens_State{}
+		}
+	} else if rl.IsKeyPressed(.SPACE) {
+		fmt.println("END DRAWING")
+		g.round_state = Playing_Tokens_State{}
+	}
+}
+
+
+get_card_hand_rect :: proc(i: int) -> Rect {
+	rect: Rect
+	rect.x = (f32(i) * (BOARD_TILE_SIZE + PLAYER_HAND_CARD_SPACING)) + PLAYER_HAND_X_START
+	rect.y = PLAYER_HAND_Y_START
+	rect.width = BOARD_TILE_SIZE
+	rect.height = BOARD_TILE_SIZE
+
+	return rect
+}
+
+update_playing_tokens :: proc() {
+	g.player.hovered_token_active = false
+	mouse := rl.GetMousePosition()
+	for i in 0..<PLAYER_MAX_HAND_SIZE {
+		rect := get_card_hand_rect(i)
+		/* rect: Rect */
+		/* rect.x = f32(i) * BOARD_TILE_SIZE + PLAYER_HAND_X_START */
+		/* rect.y = PLAYER_HAND_Y_START */
+		/* rect.width = BOARD_TILE_SIZE */
+		/* rect.height = BOARD_TILE_SIZE */
+
+		if rl.CheckCollisionPointRec(mouse, rect) {
+			g.player.hovered_token_active = true
+			g.player.hovered_token_id = i
+
+		}
+	}
+
+	if g.player.dragged_token_active {
+		// handle dragging
+		if rl.IsMouseButtonReleased(.LEFT) {
+
+			// handle dropping token
+			// if token is above valid tile on board place it
+			// else put token back in hand position (do nothing just set drag not active)
+			found_valid_board_position := false
+			valid_board_position: Board_Pos
+			for x in 0..<BOARD_COLUMNS {
+				for y in 0..<BOARD_ROWS {
+					dragging_token := sa.get(g.player.current_hand, g.player.dragged_token_id)
+					if y == 1 && !dragging_token.backliner {
+						continue
+					}
+
+					rect: Rect
+					rect.x = f32(x) * BOARD_TILE_SIZE
+					rect.y = f32(y) * BOARD_TILE_SIZE + PLAYER_ROW_OFFSET_Y
+					rect.width = BOARD_TILE_SIZE
+					rect.height = BOARD_TILE_SIZE
+					if rl.CheckCollisionPointRec(mouse, rect) {
+						found_valid_board_position = true
+						valid_board_position = {x, y, .Player}
+						break
+					}
+				}
+				if found_valid_board_position do break
+			}
+
+			if found_valid_board_position {
+				// valid board position
+				// drop token here
+				g.player_rows[valid_board_position.x][valid_board_position.y] = sa.get(g.player.current_hand, g.player.dragged_token_id)
+				sa.ordered_remove(&g.player.current_hand, g.player.dragged_token_id)
+			}
+
+
+			g.player.dragged_token_active = false
+		}
+
+	} else if g.player.hovered_token_active {
+		// handle hovering
+		if rl.IsMouseButtonDown(.LEFT) {
+
+			token := sa.get(g.player.current_hand, g.player.hovered_token_id)
+			if .Unplayable not_in token.attributes {
+
+				g.player.dragged_token_active = true
+				g.player.dragged_token_id = g.player.hovered_token_id
+				// setting offset here even though it only counts if we actually start dragging
+				token_x := (f32(g.player.hovered_token_id) * (BOARD_TILE_SIZE + PLAYER_HAND_CARD_SPACING)) + PLAYER_HAND_X_START
+				token_y := f32(PLAYER_HAND_Y_START)
+				g.player.dragged_token_offset = mouse - {token_x, token_y}
+			}
+		}
+	}
+
+	/////////////////
+	// HARDCODED END OF PLAYING TOKENS BUTTON
+	if rl.IsKeyPressed(.SPACE) {
+		doing_actions: Doing_Actions_State
+		doing_actions.initialized = false
+		g.round_state = doing_actions
+		fmt.println("space pressed")
+	}
+}
+
+// returns true if equal
+tokens_equals :: proc(a, b: Board_Token) -> bool {
+	if a.current_life != b.current_life do return false
+	if a.type != b.type do return false
+
+	/* if a.type != .None || b.type != .None { */
+	/* 	fmt.println("COMPARING:") */
+	/* 	fmt.println("A:", a) */
+	/* 	fmt.println("B:", b) */
+	/* } */
+	return true
+}
+
+// returns true if equal
+compare_board_state :: proc(a, b: [BOARD_COLUMNS][BOARD_ROWS]Board_Token) -> bool {
+	for x in 0..<BOARD_COLUMNS {
+		for y in 0..<BOARD_ROWS {
+			if !tokens_equals(a[x][y], b[x][y]) do return false
+		}
+	}
+
+	return true
+}
+
+update_player_actions_state :: proc(state: ^Doing_Actions_State) {
+	if !state.initialized {
+		fmt.println("init player actions")
+		for x in 0..<BOARD_COLUMNS {
+			for y in 0..<BOARD_ROWS {
+				if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid {
+					token.finished_action = false
+					token.state = Init_State{}
+
+					token.current_ability = 0
+					for &ability in sa.slice(&token.abilities) {
+						ability.state = Ability_Init_State{}
+					}
+				}
+			}
+		}
+
+		state.start = rl.GetTime()
+		state.current_board_pos = {0, 0, .Player}
+		state.initialized = true
+
+		if g.current_turn != 0 {
+			fmt.println("check round end")
+			// compare to previous state
+
+			player_state_same := compare_board_state(g.player_rows, g.prev_player_state)
+			/* fmt.println("PLAYER STATE CHANGED:", player_state_same) */
+			enemy_state_same := compare_board_state(g.enemy_rows, g.prev_enemy_state)
+			/* fmt.println("ENEMY STATE CHANGED:", enemy_state_same) */
+			if player_state_same && enemy_state_same {
+
+
+				// nothing happened
+				if game_end, player_won := check_game_end(); game_end {
+					if player_won {
+						g.round_state = Player_Won_State{}
+						g.enemy_lives -= 1
+						return
+					} else {
+						g.round_state = Player_Lost_State{}
+						g.player_lives -= 1
+						return
+					}
+				}
+
+				result := get_round_winner()
+				g.round_state = Round_End_State{result}
+				return
+			}
+
+		}
+		g.prev_player_state = g.player_rows
+		g.prev_enemy_state = g.enemy_rows
+	}
+
+
+
+
+	// get token board pos
+	token_pos, pos_ok := find_next_token(state.current_board_pos)
+	if !pos_ok {
+		g.round_state = Doing_Enemy_Actions_State{}
+
+		// TODO (rhoe) DO DAMAGE DIRECTLY ON TURN
+		/* for x in 0..<BOARD_COLUMNS { */
+		/* 	for y in 0..<BOARD_ROWS { */
+		/* 		if token, token_valid := get_token_from_board_pos({x, y}, .Enemy); token_valid { */
+		/* 			if token.life <= 0 { */
+		/* 				token.type = .None */
+		/* 			} */
+		/* 		} */
+		/* 	} */
+		/* } */
+		// if rl.IsKeyPressed(.SPACE) {
+
+		// 	if round_end, result := check_round_end(); round_end {
+		// 		// round finished
+		// 		// check if game is over (one player has 0 or less lives)
+		// 		fmt.println("ROUND ENDED")
+
+		// 		if game_end, player_won := check_game_end(); game_end {
+		// 			if player_won {
+		// 				g.round_state = Player_Won_State{}
+		// 				break
+		// 			} else {
+		// 				g.round_state = Player_Lost_State{}
+		// 				break
+		// 			}
+		// 		}
+
+
+		// 		g.round_state = Round_End_State{result}
+		// 			fmt.println("ROUND END STATE")
+		// 	} else {
+		// 		g.round_state = Doing_Enemy_Actions_State{}
+		// 		fmt.println("DOING ENEMY ACTIONS STATE")
+		// 	}
+		// }
+
+		return
+	}
+
+	// get token pointer
+	current_token, token_ok := get_token_from_board_pos(token_pos)
+	if !token_ok || current_token.finished_action {
+		state.current_board_pos = increment_board_position(state.current_board_pos)
+		return
+	}
+
+	// do action
+	do_token_action(current_token, token_pos, state.start)
+
+
+}
+
+update_enemy_actions_state :: proc(state: ^Doing_Enemy_Actions_State) {
+	if !state.initialized {
+		fmt.println("init enemy actions")
+		for x in 0..<BOARD_COLUMNS {
+			for y in 0..<BOARD_ROWS {
+				if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid {
+					token.finished_action = false
+					token.state = Init_State{}
+					token.current_ability = 0
+					for &ability in sa.slice(&token.abilities) {
+						ability.state = Ability_Init_State{}
+					}
+				}
+			}
+		}
+
+		state.start = rl.GetTime()
+		state.current_board_pos = {0, 0, .Enemy}
+		state.initialized = true
+	}
+
+	// get token board pos
+	token_pos, pos_ok := find_next_token(state.current_board_pos)
+	if !pos_ok {
+		g.round_state = Resolve_Damage_State{false}
+		fmt.println("RESOLIVE DAMAGE STATE")
+		// TODO (rhoe) DO DAMAGE DIRECTLY ON TURN
+		/* for x in 0..<BOARD_COLUMNS { */
+		/* 	for y in 0..<BOARD_ROWS { */
+		/* 		if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid { */
+		/* 			if token.life <= 0 { */
+		/* 				token.type = .None */
+		/* 			} */
+		/* 		} */
+		/* 	} */
+		/* } */
+
+		/* g.round_state = Doing_Actions_State{} */
+
+		return
+	}
+
+	// get token pointer
+	current_token, token_ok := get_token_from_board_pos(token_pos)
+	if !token_ok || current_token.finished_action {
+		state.current_board_pos = increment_board_position(state.current_board_pos)
+		return
+	}
+
+	// do action
+	do_token_action(current_token, token_pos, state.start)
+
+}
+
+resolve_damage :: proc(state: ^Resolve_Damage_State) {
+
+	if !state.done_resolving {
+
+		/* resolve player token damage */
+		for x in 0..<BOARD_COLUMNS {
+			for y in 0..<BOARD_ROWS {
+				if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid && token.type != .None {
+					if token.current_life <= 0 {
+						token.type = .None
+					} else if token.current_life > token.max_life {
+						token.current_life = token.max_life
+					}
+				}
+			}
+		}
+
+		// resolve enemy token damage
+		for x in 0..<BOARD_COLUMNS {
+			for y in 0..<BOARD_ROWS {
+				if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid && token.type != .None {
+					if token.current_life <= 0 {
+						token.type = .None
+					} else if token.current_life > token.max_life {
+						token.current_life = token.max_life
+					}
+				}
+			}
+		}
+
+
+
+		state.done_resolving = true
+	}
+
+	if rl.IsKeyPressed(.SPACE) {
+		// if round_end, result := check_round_end(); round_end {
+		// 	// round finished
+		// 	// check if game is over (one player has 0 or less lives)
+		// 	fmt.println("ROUND ENDED")
+
+		// 	if game_end, player_won := check_game_end(); game_end {
+		// 		if player_won {
+		// 			g.round_state = Player_Won_State{}
+		// 			break
+		// 		} else {
+		// 			g.round_state = Player_Lost_State{}
+		// 			break
+		// 		}
+		// 	}
+
+
+		// 	g.round_state = Round_End_State{result}
+		// 	fmt.println("ROUND END STATE")
+		// } else {
+		// 	// g.round_state = Doing_Enemy_Actions_State{}
+		// 	g.round_state = Doing_Actions_State{}
+		// 	// fmt.println("DOING ENEMY ACTIONS STATE")
+		// }
+
+		g.current_turn += 1
+		g.round_state = Doing_Actions_State{}
+	}
+}
+
+round_end :: proc() {
+	if rl.IsKeyPressed(.SPACE) {
+		g.round_state = Start_Round_State{}
+
+		// TODO (rhoe) we need to handle when there is no more waves
+		g.current_wave += 1
+	}
+}
+
 update :: proc() {
 	if rl.IsKeyPressed(.ESCAPE) {
 		g.run = false
@@ -489,398 +937,19 @@ update :: proc() {
 
 	switch &state in g.round_state {
 	case Start_Round_State:
-
-		fmt.println("STARTING NEW ROUND")
-
-		// reset board
-		for x in 0..<BOARD_COLUMNS {
-			for y in 0..<BOARD_ROWS {
-				if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid {
-					token.type = .None
-				}
-			}
-		}
-		for x in 0..<BOARD_COLUMNS {
-			for y in 0..<BOARD_ROWS {
-				if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid {
-					token.type = .None
-				}
-			}
-		}
-
-		sa.clear(&g.player.current_hand)
-
-		// setup wave
-		level := sa.get_ptr(&g.levels, g.current_level)
-		wave := sa.get_ptr(&level.waves, g.current_wave)
-		g.enemy_rows = wave.enemy_rows
-
-		g.player.food = PLAYER_ROUND_FOOD
-		g.round_state = Getting_Tokens_State{}
-		g.current_turn = 0
-
-
+		start_round()
 	case Getting_Tokens_State:
-
-		// 1. click bag to draw token
-		// 2. get token and consume food cost
-		// 3. check if we used too much food
-		// 4. play token
-		// 5. player ends or repeats
-		mouse := rl.GetMousePosition()
-		if rl.CheckCollisionPointCircle(mouse, {BAG_POS_X, BAG_POS_Y}, BAG_RADIUS) {
-			if rl.IsMouseButtonReleased(.LEFT) {
-
-				// check if there is more tokens left
-				if sa.len(g.player.bag) <= 0 {
-					g.round_state = Player_Lost_State{}
-					break
-				} 
-
-				fmt.println("PRESSED BAG!")
-				rnd := rl.GetRandomValue(0, i32(sa.len(g.player.bag)-1))
-				token := sa.get(g.player.bag, int(rnd))
-				sa.unordered_remove(&g.player.bag, int(rnd))
-				sa.append(&g.player.current_hand, token)
-				g.player.food -= token.food_cost
-				if g.player.food < 0 {
-					g.player_lives -= 1
-					/* g.round_state = End_Round_State{} */
-					g.round_state = Round_End_State{.Enemy_Won}
-					break
-				} else if g.player.food == 0 {
-					g.round_state = Playing_Tokens_State{}
-					break
-				}
-
-
-			}
-		}
-
-
-		
-		if rl.CheckCollisionPointCircle(mouse, {END_DRAWING_BUTTON_POS_X, END_DRAWING_BUTTON_POS_Y}, END_DRAWING_BUTTON_RADIUS) {
-			if rl.IsMouseButtonReleased(.LEFT) {
-				fmt.println("END DRAWING")
-				g.round_state = Playing_Tokens_State{}
-			}
-		}
-		
-		
-
+		getting_tokens()
 	case Playing_Tokens_State:
-		g.player.hovered_token_active = false
-		mouse := rl.GetMousePosition()
-		for i in 0..<PLAYER_MAX_HAND_SIZE {
-			rect: Rect
-			rect.x = f32(i) * BOARD_TILE_SIZE + PLAYER_HAND_X_START
-			rect.y = PLAYER_HAND_Y_START
-			rect.width = BOARD_TILE_SIZE
-			rect.height = BOARD_TILE_SIZE
-
-			if rl.CheckCollisionPointRec(mouse, rect) {
-				g.player.hovered_token_active = true
-				g.player.hovered_token_id = i
-
-			}
-		}
-
-		if g.player.dragged_token_active {
-			// handle dragging
-			if rl.IsMouseButtonReleased(.LEFT) {
-
-				// handle dropping token
-				// if token is above valid tile on board place it
-				// else put token back in hand position (do nothing just set drag not active)
-				found_valid_board_position := false
-				valid_board_position: Board_Pos
-				for x in 0..<BOARD_COLUMNS {
-					for y in 0..<BOARD_ROWS {
-						dragging_token := sa.get(g.player.current_hand, g.player.dragged_token_id)
-						if y == 1 && !dragging_token.backliner {
-							continue
-						}
-
-						rect: Rect
-						rect.x = f32(x) * BOARD_TILE_SIZE
-						rect.y = f32(y) * BOARD_TILE_SIZE + PLAYER_ROW_OFFSET_Y
-						rect.width = BOARD_TILE_SIZE
-						rect.height = BOARD_TILE_SIZE
-						if rl.CheckCollisionPointRec(mouse, rect) {
-							found_valid_board_position = true
-							valid_board_position = {x, y, .Player}
-							break
-						}
-					}
-					if found_valid_board_position do break
-				}
-
-				if found_valid_board_position {
-					// valid board position
-					// drop token here
-					g.player_rows[valid_board_position.x][valid_board_position.y] = sa.get(g.player.current_hand, g.player.dragged_token_id)
-					sa.ordered_remove(&g.player.current_hand, g.player.dragged_token_id)
-				}
-
-
-				g.player.dragged_token_active = false
-			}
-
-		} else if g.player.hovered_token_active {
-			// handle hovering
-			if rl.IsMouseButtonDown(.LEFT) {
-
-				token := sa.get(g.player.current_hand, g.player.hovered_token_id)
-				if .Unplayable not_in token.attributes {
-
-					g.player.dragged_token_active = true
-					g.player.dragged_token_id = g.player.hovered_token_id
-					// setting offset here even though it only counts if we actually start dragging
-					token_x := f32(g.player.hovered_token_id) * BOARD_TILE_SIZE + PLAYER_HAND_X_START
-					token_y := f32(PLAYER_HAND_Y_START)
-					g.player.dragged_token_offset = mouse - {token_x, token_y}
-				}
-			}
-		}
-
-		/////////////////
-		// HARDCODED END OF PLAYING TOKENS BUTTON
-		if rl.IsKeyPressed(.SPACE) {
-			doing_actions: Doing_Actions_State
-			doing_actions.initialized = false
-			g.round_state = doing_actions
-			fmt.println("space pressed")
-		}
+		update_playing_tokens()
 	case Doing_Actions_State:
-		if !state.initialized {
-			fmt.println("init player actions")
-			for x in 0..<BOARD_COLUMNS {
-				for y in 0..<BOARD_ROWS {
-					if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid {
-						token.finished_action = false
-						token.state = Init_State{}
-
-						token.current_ability = 0
-						for &ability in sa.slice(&token.abilities) {
-							ability.state = Ability_Init_State{}
-						}
-					}
-				}
-			}
-
-			state.start = rl.GetTime()
-			state.current_board_pos = {0, 0, .Player}
-			state.initialized = true
-		}
-
-		if g.current_turn != 0 {
-			fmt.println("check round end")
-			// compare to previous state
-			if g.player_rows == g.prev_player_state && g.enemy_rows == g.prev_enemy_state {
-				// nothing happened
-				if game_end, player_won := check_game_end(); game_end {
-					if player_won {
-						g.round_state = Player_Won_State{}
-						break
-					} else {
-						g.round_state = Player_Lost_State{}
-						break
-					}
-				}
-
-				result := get_round_winner()
-				g.round_state = Round_End_State{result}
-				break
-			}
-
-
-			g.prev_player_state = g.player_rows
-			g.prev_enemy_state = g.enemy_rows
-		}
-
-
-		// get token board pos
-		token_pos, pos_ok := find_next_token(state.current_board_pos)
-		if !pos_ok {
-			g.round_state = Doing_Enemy_Actions_State{}
-
-			// TODO (rhoe) DO DAMAGE DIRECTLY ON TURN
-			/* for x in 0..<BOARD_COLUMNS { */
-			/* 	for y in 0..<BOARD_ROWS { */
-			/* 		if token, token_valid := get_token_from_board_pos({x, y}, .Enemy); token_valid { */
-			/* 			if token.life <= 0 { */
-			/* 				token.type = .None */
-			/* 			} */
-			/* 		} */
-			/* 	} */
-			/* } */
-			// if rl.IsKeyPressed(.SPACE) {
-
-			// 	if round_end, result := check_round_end(); round_end {
-			// 		// round finished
-			// 		// check if game is over (one player has 0 or less lives)
-			// 		fmt.println("ROUND ENDED")
-
-			// 		if game_end, player_won := check_game_end(); game_end {
-			// 			if player_won {
-			// 				g.round_state = Player_Won_State{}
-			// 				break
-			// 			} else {
-			// 				g.round_state = Player_Lost_State{}
-			// 				break
-			// 			}
-			// 		}
-
-
-			// 		g.round_state = Round_End_State{result}
-			// 			fmt.println("ROUND END STATE")
-			// 	} else {
-			// 		g.round_state = Doing_Enemy_Actions_State{}
-			// 		fmt.println("DOING ENEMY ACTIONS STATE")
-			// 	}
-			// }
-
-			break
-		}
-
-		// get token pointer
-		current_token, token_ok := get_token_from_board_pos(token_pos)
-		if !token_ok || current_token.finished_action {
-			state.current_board_pos = increment_board_position(state.current_board_pos)
-			break
-		}
-
-		// do action
-		do_token_action(current_token, token_pos, state.start)
-
-
+		update_player_actions_state(&state)
 	case Doing_Enemy_Actions_State:
-		if !state.initialized {
-			fmt.println("init enemy actions")
-			for x in 0..<BOARD_COLUMNS {
-				for y in 0..<BOARD_ROWS {
-					if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid {
-						token.finished_action = false
-						token.state = Init_State{}
-						token.current_ability = 0
-						for &ability in sa.slice(&token.abilities) {
-							ability.state = Ability_Init_State{}
-						}
-					}
-				}
-			}
-
-			state.start = rl.GetTime()
-			state.current_board_pos = {0, 0, .Enemy}
-			state.initialized = true
-		}
-
-		// get token board pos
-		token_pos, pos_ok := find_next_token(state.current_board_pos)
-		if !pos_ok {
-			if rl.IsKeyPressed(.SPACE) {
-				g.round_state = Resolve_Damage_State{false}
-				fmt.println("RESOLIVE DAMAGE STATE")
-			}
-			// TODO (rhoe) DO DAMAGE DIRECTLY ON TURN
-			/* for x in 0..<BOARD_COLUMNS { */
-			/* 	for y in 0..<BOARD_ROWS { */
-			/* 		if token, token_valid := get_token_from_board_pos({x, y}, .Player); token_valid { */
-			/* 			if token.life <= 0 { */
-			/* 				token.type = .None */
-			/* 			} */
-			/* 		} */
-			/* 	} */
-			/* } */
-
-			/* g.round_state = Doing_Actions_State{} */
-
-			break
-		}
-
-		// get token pointer
-		current_token, token_ok := get_token_from_board_pos(token_pos)
-		if !token_ok || current_token.finished_action {
-			state.current_board_pos = increment_board_position(state.current_board_pos)
-			break
-		}
-
-		// do action
-		do_token_action(current_token, token_pos, state.start)
-
+		update_enemy_actions_state(&state)
 	case Resolve_Damage_State:
-
-		if !state.done_resolving {
-
-			/* resolve player token damage */
-			for x in 0..<BOARD_COLUMNS {
-				for y in 0..<BOARD_ROWS {
-					if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid && token.type != .None {
-						if token.current_life <= 0 {
-							token.type = .None
-						} else if token.current_life > token.max_life {
-							token.current_life = token.max_life
-						}
-					}
-				}
-			}
-
-			// resolve enemy token damage
-			for x in 0..<BOARD_COLUMNS {
-				for y in 0..<BOARD_ROWS {
-					if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid && token.type != .None {
-						if token.current_life <= 0 {
-							token.type = .None
-						} else if token.current_life > token.max_life {
-							token.current_life = token.max_life
-						}
-					}
-				}
-			}
-
-
-
-			state.done_resolving = true
-		}
-
-		if rl.IsKeyPressed(.SPACE) {
-			// if round_end, result := check_round_end(); round_end {
-			// 	// round finished
-			// 	// check if game is over (one player has 0 or less lives)
-			// 	fmt.println("ROUND ENDED")
-
-			// 	if game_end, player_won := check_game_end(); game_end {
-			// 		if player_won {
-			// 			g.round_state = Player_Won_State{}
-			// 			break
-			// 		} else {
-			// 			g.round_state = Player_Lost_State{}
-			// 			break
-			// 		}
-			// 	}
-
-
-			// 	g.round_state = Round_End_State{result}
-			// 	fmt.println("ROUND END STATE")
-			// } else {
-			// 	// g.round_state = Doing_Enemy_Actions_State{}
-			// 	g.round_state = Doing_Actions_State{}
-			// 	// fmt.println("DOING ENEMY ACTIONS STATE")
-			// }
-
-			g.current_turn += 1
-			g.round_state = Doing_Actions_State{}
-		}
-
-
+		resolve_damage(&state)
 	case Round_End_State:
-		if rl.IsKeyPressed(.SPACE) {
-			g.round_state = Start_Round_State{}
-
-			// TODO (rhoe) we need to handle when there is no more waves
-			g.current_wave += 1
-		}
-		
+		round_end()
 	case Player_Lost_State:
 	case Player_Won_State:
 	}
@@ -897,6 +966,20 @@ check_game_end :: proc() -> (game_end:bool, player_won:bool) {
 	}
 
 	return false, false
+}
+
+get_board_value :: proc(rows: [BOARD_COLUMNS][BOARD_ROWS]Board_Token) -> int {
+	value := 0
+	for x in 0..<BOARD_COLUMNS {
+		for y in 0..<BOARD_ROWS {
+			token := rows[x][y]
+			if token.type != .None {
+				value += token.value
+			}
+		}
+	}
+
+	return value
 }
 
 get_round_winner :: proc() -> Round_End_Result {
@@ -934,73 +1017,73 @@ get_round_winner :: proc() -> Round_End_Result {
 // checks if round ends
 // also mutates game state and gives removes life from looser
 // returns true if round should end
-check_round_end :: proc() -> (bool, Round_End_Result) {
-	// check if game ended
-	// 1. check if enemy has more tokens
-	// 2. check if player has more tokens
-	enemy_has_tokens_left := false
-	enemy_has_targets := false
-	enemy_token_value := 0
-	for x in 0..<BOARD_COLUMNS {
-		for y in 0..<BOARD_ROWS {
-			if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid {
-				if token.type != .None {
-					enemy_has_tokens_left = true
-					enemy_token_value += token.value
-					enemy_has_targets = check_if_token_has_targets(token, {x, y, .Enemy})
-				}
-			}
-		}
-	}
+/* check_round_end :: proc() -> (bool, Round_End_Result) { */
+/* 	// check if game ended */
+/* 	// 1. check if enemy has more tokens */
+/* 	// 2. check if player has more tokens */
+/* 	enemy_has_tokens_left := false */
+/* 	enemy_has_targets := false */
+/* 	enemy_token_value := 0 */
+/* 	for x in 0..<BOARD_COLUMNS { */
+/* 		for y in 0..<BOARD_ROWS { */
+/* 			if token, token_valid := get_token_from_board_pos({x, y, .Enemy}); token_valid { */
+/* 				if token.type != .None { */
+/* 					enemy_has_tokens_left = true */
+/* 					enemy_token_value += token.value */
+/* 					enemy_has_targets = check_if_token_has_targets(token, {x, y, .Enemy}) */
+/* 				} */
+/* 			} */
+/* 		} */
+/* 	} */
 
-	player_has_tokens_left := false
-	player_has_targets := false
-	player_token_value := 0
-	for x in 0..<BOARD_COLUMNS {
-		for y in 0..<BOARD_ROWS {
-			if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid {
-				if token.type != .None {
-					player_has_tokens_left = true
-					player_token_value += token.value
-					player_has_targets = check_if_token_has_targets(token, {x, y, .Player})
-				}
-			}
-		}
-	}
+/* 	player_has_tokens_left := false */
+/* 	player_has_targets := false */
+/* 	player_token_value := 0 */
+/* 	for x in 0..<BOARD_COLUMNS { */
+/* 		for y in 0..<BOARD_ROWS { */
+/* 			if token, token_valid := get_token_from_board_pos({x, y, .Player}); token_valid { */
+/* 				if token.type != .None { */
+/* 					player_has_tokens_left = true */
+/* 					player_token_value += token.value */
+/* 					player_has_targets = check_if_token_has_targets(token, {x, y, .Player}) */
+/* 				} */
+/* 			} */
+/* 		} */
+/* 	} */
 
-	if !enemy_has_tokens_left && player_has_tokens_left {
-		// player won
-		g.enemy_lives -= 1
-		return true, .Player_Won
+/* 	if !enemy_has_tokens_left && player_has_tokens_left { */
+/* 		// player won */
+/* 		g.enemy_lives -= 1 */
+/* 		return true, .Player_Won */
 		
-	} else if enemy_has_tokens_left && !player_has_tokens_left {
-		// enemy won
-		g.player_lives -= 1
-		return true, .Enemy_Won
+/* 	} else if enemy_has_tokens_left && !player_has_tokens_left { */
+/* 		// enemy won */
+/* 		g.player_lives -= 1 */
+/* 		return true, .Enemy_Won */
 
-	} else if !enemy_has_tokens_left && !player_has_tokens_left {
-		// both players lost
-		g.player_lives -= 1
-		g.enemy_lives -= 1
-		return true, .Draw
+/* 	} else if !enemy_has_tokens_left && !player_has_tokens_left { */
+/* 		// both players lost */
+/* 		g.player_lives -= 1 */
+/* 		g.enemy_lives -= 1 */
+/* 		return true, .Draw */
 
-	} else if enemy_has_tokens_left && player_has_tokens_left {
-		if !enemy_has_targets && !player_has_targets {
-			// count token value and decide winner
-			// player wins if equal value
-			if player_token_value >= enemy_token_value {
-				g.enemy_lives -= 1
-				return true, .Player_Won
-			} else {
-				g.player_lives -= 1
-				return true, .Enemy_Won
-			}
-			return true, .Draw
-		}
-	}
+/* 	} else if enemy_has_tokens_left && player_has_tokens_left { */
+/* 		if !enemy_has_targets && !player_has_targets { */
+/* 			// count token value and decide winner */
+/* 			// player wins if equal value */
+/* 			if player_token_value >= enemy_token_value { */
+/* 				g.enemy_lives -= 1 */
+/* 				return true, .Player_Won */
+/* 			} else { */
+/* 				g.player_lives -= 1 */
+/* 				return true, .Enemy_Won */
+/* 			} */
+/* 			return true, .Draw */
+/* 		} */
+/* 	} */
 
-	return false, {}
-}
+/* 	return false, {} */
+/* } */
 
 /* get_token_counter_pos :: proc(pos: Board_Pos) -> Board_Pos { */
 /* 	new_pos: Board_Pos */
@@ -1385,6 +1468,7 @@ draw :: proc() {
 			if board_token.type != .None {
 				rl.DrawTexturePro(g.atlas_texture, atlas_textures[board_token.texture_name].rect, rect, {}, 0, rl.WHITE)
 				rl.DrawText(rl.TextFormat("%d", board_token.current_life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
+				rl.DrawText(rl.TextFormat("%d", board_token.value), i32(rect.x) + BOARD_TILE_SIZE - 24, i32(rect.y+24), 24, rl.GOLD)
 			}
 
 
@@ -1413,12 +1497,15 @@ draw :: proc() {
 			if board_token.type != .None {
 				rl.DrawTexturePro(g.atlas_texture, atlas_textures[board_token.texture_name].rect, rect, {}, 0, rl.WHITE)
 				rl.DrawText(rl.TextFormat("%d", board_token.current_life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
+				rl.DrawText(rl.TextFormat("%d", board_token.value), i32(rect.x) + BOARD_TILE_SIZE - 24, i32(rect.y+24), 24, rl.GOLD)
 			}
 
 			/* rl.DrawText(rl.TextFormat("(%d, %d)", x_pos, y_pos), i32(rect.x), i32(rect.y), 14, rl.GREEN) */
 
 		}
 	}
+
+
 
 
 
@@ -1434,17 +1521,22 @@ draw :: proc() {
 			rect.width = BOARD_TILE_SIZE
 			rect.height = BOARD_TILE_SIZE
 			rl.DrawTexturePro(g.atlas_texture, atlas_textures[board_token.texture_name].rect, rect, {}, 0, rl.WHITE)
+			rl.DrawText(rl.TextFormat("%d", board_token.current_life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
+			rl.DrawText(rl.TextFormat("%d", board_token.value), i32(rect.x) + BOARD_TILE_SIZE - 24, i32(rect.y+24), 24, rl.GOLD)
 
 		} else {
-			rect: Rect
-			rect.x = f32(i) * BOARD_TILE_SIZE + PLAYER_HAND_X_START
-			rect.y = PLAYER_HAND_Y_START
-			rect.width = BOARD_TILE_SIZE
-			rect.height = BOARD_TILE_SIZE
+			rect := get_card_hand_rect(i)
+			/* rect: Rect */
+			/* rect.x = f32(i) * BOARD_TILE_SIZE + PLAYER_HAND_X_START */
+			/* rect.y = PLAYER_HAND_Y_START */
+			/* rect.width = BOARD_TILE_SIZE */
+			/* rect.height = BOARD_TILE_SIZE */
 			rl.DrawTexturePro(g.atlas_texture, atlas_textures[board_token.texture_name].rect, rect, {}, 0, rl.WHITE)
 			if g.player.hovered_token_active && g.player.hovered_token_id == i {
 				rl.DrawRectangleRec(rect, rl.Fade(rl.PURPLE, 0.5))
 			}
+			rl.DrawText(rl.TextFormat("%d", board_token.current_life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
+			rl.DrawText(rl.TextFormat("%d", board_token.value), i32(rect.x) + BOARD_TILE_SIZE - 24, i32(rect.y+24), 24, rl.GOLD)
 		}
 	}
 
@@ -1460,6 +1552,10 @@ draw :: proc() {
 	rl.DrawText(rl.TextFormat("enemy lives:%d", g.enemy_lives), 0, 0, 20, rl.RED)
 	rl.DrawText(rl.TextFormat("player lives:%d", g.player_lives), 400, 0, 20, rl.RED)
 	rl.DrawText(rl.TextFormat("FOOD:%d", g.player.food), 1000, 100, 20, rl.GREEN)
+
+
+	rl.DrawText(rl.TextFormat("enemy value:%d", get_board_value(g.enemy_rows)), 620, 150, 20, rl.GOLD)
+	rl.DrawText(rl.TextFormat("player value:%d", get_board_value(g.player_rows)), 620, 350, 20, rl.GOLD)
 
 	#partial switch state in g.round_state {
 	case Round_End_State:
@@ -1557,8 +1653,8 @@ game_init :: proc() {
 	level := sa.get_ptr(&g.levels, 0)
 
 	first_wave: Wave
-	first_wave.enemy_rows[1][BACK_ROW] = create_board_token(.Archer, .Enemy)
-	first_wave.enemy_rows[2][BACK_ROW] = create_board_token(.Healer, .Enemy)
+	first_wave.enemy_rows[1][FRONT_ROW] = create_board_token(.Swordsman, .Enemy)
+	/* first_wave.enemy_rows[2][FRONT_ROW] = create_board_token(.Healer, .Enemy) */
 	sa.append(&level.waves, first_wave)
 
 
