@@ -918,7 +918,7 @@ resolve_damage :: proc(state: ^Resolve_Damage_State) {
 		state.done_resolving = true
 	}
 
-	if rl.IsKeyPressed(.SPACE) {
+	/* if rl.IsKeyPressed(.SPACE) { */
 		// if round_end, result := check_round_end(); round_end {
 		// 	// round finished
 		// 	// check if game is over (one player has 0 or less lives)
@@ -978,7 +978,7 @@ resolve_damage :: proc(state: ^Resolve_Damage_State) {
 		g.prev_enemy_state = g.enemy_rows
 		g.current_turn += 1
 		g.round_state = Player_Actions_State{}
-	}
+	/* } */
 }
 
 round_end :: proc() {
@@ -1325,10 +1325,33 @@ draw :: proc() {
 	////////////
 	// DRAW BOARD OUTLINE
 	for x in 0..<BOARD_COLUMNS {
-		for y in 0..<BOARD_ROWS*2 {
+		for y in 0..<BOARD_ROWS {
 			x_pos := x * BOARD_TILE_SIZE
 			/* y_pos := y * BOARD_TILE_SIZE + PLAYER_ROW_OFFSET_Y */
 			y_pos := (y * BOARD_TILE_SIZE) + BOARD_OFFSET_Y
+
+			rect: Rect
+			rect.x = f32(x) * BOARD_TILE_SIZE
+			rect.y = (f32(y) * BOARD_TILE_SIZE) + BOARD_OFFSET_Y
+			rect.width = BOARD_TILE_SIZE
+			rect.height = BOARD_TILE_SIZE
+
+			rl.DrawRectangleRec(rect, rl.DARKPURPLE)
+			rl.DrawRectangleLines(i32(x_pos), i32(y_pos), BOARD_TILE_SIZE, BOARD_TILE_SIZE, rl.BLACK)
+		}
+	}
+	for x in 0..<BOARD_COLUMNS {
+		for y in 0..<BOARD_ROWS {
+			x_pos := x * BOARD_TILE_SIZE
+			y_pos := y * BOARD_TILE_SIZE + PLAYER_ROW_OFFSET_Y
+
+			rect: Rect
+			rect.x = f32(x) * BOARD_TILE_SIZE
+			rect.y = (f32(y) * BOARD_TILE_SIZE) + f32(PLAYER_ROW_OFFSET_Y)
+			rect.width = BOARD_TILE_SIZE
+			rect.height = BOARD_TILE_SIZE
+
+			rl.DrawRectangleRec(rect, rl.DARKGREEN)
 			rl.DrawRectangleLines(i32(x_pos), i32(y_pos), BOARD_TILE_SIZE, BOARD_TILE_SIZE, rl.BLACK)
 		}
 	}
@@ -1344,6 +1367,7 @@ draw :: proc() {
 			rect.y = f32(y) * BOARD_TILE_SIZE + f32(PLAYER_ROW_OFFSET_Y)
 			rect.width = BOARD_TILE_SIZE
 			rect.height = BOARD_TILE_SIZE
+
 			if board_token.type != .None {
 				rl.DrawTexturePro(g.atlas_texture, atlas_textures[board_token.texture_name].rect, rect, {}, 0, rl.WHITE)
 				rl.DrawText(rl.TextFormat("%d", board_token.current_life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
@@ -1373,6 +1397,7 @@ draw :: proc() {
 			rect.y = (f32(y) * BOARD_TILE_SIZE) + BOARD_OFFSET_Y
 			rect.width = BOARD_TILE_SIZE
 			rect.height = BOARD_TILE_SIZE
+
 			if board_token.type != .None {
 				rl.DrawTexturePro(g.atlas_texture, atlas_textures[board_token.texture_name].rect, rect, {}, 0, rl.WHITE)
 				rl.DrawText(rl.TextFormat("%d", board_token.current_life), i32(rect.x), i32(rect.y+24), 24, rl.RED)
