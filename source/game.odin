@@ -60,9 +60,11 @@ BACK_ROW :: 1
 
 // GAMEPLAY CONFIGURATION
 PLAYER_LIVES :: 5
-PLAYER_ROUND_FOOD :: 10
 PLAYER_MAX_HAND_SIZE :: 5
 PLAYER_MAX_BAG_SIZE :: 30
+PLAYER_START_FOOD :: 5
+PLAYER_ROUND_FOOD :: 3
+PLAYER_MAX_FOOD :: 5
 
 
 Rect :: rl.Rectangle
@@ -175,6 +177,7 @@ Board_Token :: struct {
 
 	// TODO (rhoe) should this be an attribute?
 	backliner: bool,
+	siege: bool,
 
 	// ability
 	pre_battle_abilities: sa.Small_Array(TOKEN_MAX_ABILITIES, Ability), // happens just once before autobattle start
@@ -183,6 +186,7 @@ Board_Token :: struct {
 
 	// buf
 	empowered_amount: int,
+
 }
 
 Player_State :: struct {
@@ -313,8 +317,9 @@ create_board_token :: proc(type: Board_Token_Type) -> Board_Token {
 	/* token.alliance = alliance */
 	token.max_life = 1
 	token.value = 1
-	token.food_cost = 2
+	token.food_cost = 1
 	token.backliner = false
+	token.siege = false
 	switch type {
 	case .None:
 	case .Archer:
@@ -322,7 +327,6 @@ create_board_token :: proc(type: Board_Token_Type) -> Board_Token {
 		token.max_life = 1
 		ability: Ability
 		ability.effect = .Damage
-		token.food_cost = 2
 		ability.power = 1
 		ability.color = rl.RED
 		ability.target = {.Backline_Priority}
@@ -332,7 +336,7 @@ create_board_token :: proc(type: Board_Token_Type) -> Board_Token {
 	case .Ranger:
 		token.texture_name = .Archer
 		token.max_life = 2
-		token.food_cost = 3
+		token.food_cost = 2
 		ability: Ability
 		ability.effect = .Damage
 		ability.power = 1
@@ -344,19 +348,19 @@ create_board_token :: proc(type: Board_Token_Type) -> Board_Token {
 	case .Swordsman:
 		token.max_life = 2
 		token.value = 2
-		token.food_cost = 1
 		token.texture_name = .Test_Face
-		/* token.attributes = {.Hit_Frontline} */
 		ability: Ability
 		ability.effect = .Damage
 		ability.power = 1
 		ability.color = rl.RED
 		ability.target = {.Frontline}
 		sa.append(&token.abilities, ability)
+		token.siege = true
+
 	case .Cleaver:
 		token.max_life = 1
 		token.value = 2
-		token.food_cost = 3
+		token.food_cost = 2
 		token.texture_name = .Cleaver
 		/* token.attributes = {.Sweep} */
 		ability: Ability
@@ -381,7 +385,7 @@ create_board_token :: proc(type: Board_Token_Type) -> Board_Token {
 	case .Bannerman:
 		token.texture_name = .Bannerman
 		token.value = 1
-		token.food_cost = 3
+		token.food_cost = 2
 		token.backliner = true
 
 		ability: Ability
@@ -564,7 +568,9 @@ start_round :: proc() {
 	wave := sa.get_ptr(&level.waves, g.current_wave)
 	g.enemy_rows = wave.enemy_rows
 
-	g.player.food = PLAYER_ROUND_FOOD
+	g.player.food += PLAYER_ROUND_FOOD
+	g.player.food = min(PLAYER_MAX_FOOD, g.player.food)
+
 	g.round_state = Getting_Tokens_State{}
 	g.current_turn = 0
 }
@@ -594,6 +600,7 @@ getting_tokens :: proc() {
 			g.player.food -= token.food_cost
 			if g.player.food < 0 {
 				g.player_lives -= 1
+				g.player.food = 0
 				/* g.round_state = End_Round_State{} */
 				g.round_state = Round_End_State{.Enemy_Won}
 				return
@@ -1024,17 +1031,64 @@ resolve_damage :: proc(state: ^Resolve_Damage_State) {
 				if game_end, player_won := check_game_end(); game_end {
 					if player_won {
 						g.round_state = Player_Won_State{}
-						g.enemy_lives -= 1
 						return
 					} else {
 						g.round_state = Player_Lost_State{}
-						g.player_lives -= 1
 						return
 					}
 				}
 
 				result := get_round_winner()
+				// switch result {
+				// case .Draw:
+				// 	g.player_lives -= 1
+				// 	g.enemy_lives -= 1
+				// case .Player_Won:
+				// 	g.enemy_lives -= 1
+				// case .Enemy_Won:
+				// 	g.player_lives -= 1
+				// }
 				g.round_state = Round_End_State{result}
+
+				for x in 0..<BOARD_COLUMNS {
+					for y in 0..<BOARD_ROWS {
+						if token, token_ok := get_token_from_board_pos({x, y, .Player}); token_ok && token.type != .None {
+							if token.siege {
+								if !target_ok({x, FRONT_ROW, .Enemy}) && !target_ok({x, BACK_ROW, .Enemy}) {
+									g.enemy_lives -= 1
+									arrow: Arrow_VFX
+									arrow.t = 0
+									arrow.start = get_board_pos_screen_pos({x, y, .Player}) + ({BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2)
+									arrow.target = {(BOARD_COLUMNS/2) * BOARD_TILE_SIZE, 0}
+									vfx: VFX
+									vfx.done = false
+									vfx.start_time = rl.GetTime()
+									vfx.subtype = arrow
+									vfx.color = rl.RED
+									sa.append(&g.active_vfx, vfx)
+								}
+							}
+						}
+						if token, token_ok := get_token_from_board_pos({x, y, .Enemy}); token_ok && token.type != .None {
+							if token.siege {
+								if !target_ok({x, FRONT_ROW, .Player}) && !target_ok({x, BACK_ROW, .Player}) {
+									g.player_lives -= 1
+									g.enemy_lives -= 1
+									arrow: Arrow_VFX
+									arrow.t = 0
+									arrow.start = get_board_pos_screen_pos({x, y, .Enemy}) + ({BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2)
+									arrow.target = {(BOARD_COLUMNS/2) * BOARD_TILE_SIZE, BOARD_ROWS * 2 * BOARD_TILE_SIZE}
+									vfx: VFX
+									vfx.done = false
+									vfx.start_time = rl.GetTime()
+									vfx.subtype = arrow
+									vfx.color = rl.RED
+									sa.append(&g.active_vfx, vfx)
+								}
+							}
+						}
+					}
+				}
 				return
 			}
 
@@ -1282,6 +1336,7 @@ do_token_ability :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Token,
 	switch state in ability.state {
 	case Ability_Init_State:
 		// do targetting etc..
+
 		sa.clear(&ability.current_targets)
 		ability.current_targets = get_ability_targets(ability, pos, token)
 
@@ -1303,8 +1358,8 @@ do_token_ability :: proc(ability: ^Ability, pos: Board_Pos, token: ^Board_Token,
 			vfx.color = ability.color
 			sa.append(&g.active_vfx, vfx)
 		}
-
 		ability.state = Ability_Animation_State{}
+		
 
 	case Ability_Animation_State:
 		// wait for animation to finish
@@ -1642,6 +1697,7 @@ game_init :: proc() {
 	/* token := create_board_token(.Archer, .Enemy) */
 	/* g.enemy_rows[0][0] = token */
 
+	g.player.food = PLAYER_START_FOOD
 	g.player_lives = PLAYER_LIVES
 	g.enemy_lives = PLAYER_LIVES
 
