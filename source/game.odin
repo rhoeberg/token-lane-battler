@@ -59,10 +59,10 @@ FRONT_ROW :: 0
 BACK_ROW :: 1
 
 // GAMEPLAY CONFIGURATION
-PLAYER_LIVES :: 5
+PLAYER_LIVES :: 10
 PLAYER_MAX_HAND_SIZE :: 5
 PLAYER_MAX_BAG_SIZE :: 30
-PLAYER_START_FOOD :: 5
+PLAYER_START_FOOD :: 2
 PLAYER_ROUND_FOOD :: 3
 PLAYER_MAX_FOOD :: 5
 
@@ -136,11 +136,6 @@ Ability_Target_Attribute :: enum {
 	Self_Adjacent, // targets token to the left and right of self
 	Self_Front, // targets token in front of self
 	Self_Behind, // targets token behind self
-	// self row
-	// self row in front
-	// self row behind
-	// front row = enemy front row
-	// back row = enemy back row
 }
 
 Ability_Effect :: enum {
@@ -270,7 +265,8 @@ VFX :: struct {
 }
 
 Wave :: struct {
-	enemy_rows: [BOARD_COLUMNS][BOARD_ROWS]Board_Token,
+	/* enemy_rows: [BOARD_COLUMNS][BOARD_ROWS]Board_Token, */
+	enemies: sa.Small_Array(BOARD_COLUMNS * BOARD_ROWS, Board_Token_Type),
 }
 
 MAX_WAVES :: 8
@@ -368,6 +364,7 @@ create_board_token :: proc(type: Board_Token_Type) -> Board_Token {
 		ability.power = 1
 		ability.color = rl.RED
 		ability.target = {.Frontline, .Sweep}
+		token.siege = true
 		sa.append(&token.abilities, ability)
 	case .Healer:
 		token.texture_name = .Healer
@@ -404,6 +401,7 @@ create_board_token :: proc(type: Board_Token_Type) -> Board_Token {
 		ability.power = 1
 		ability.color = rl.RED
 		ability.target = {.Frontline, .Backline}
+		token.siege = true
 		sa.append(&token.abilities, ability)
 	case .Rats:
 		token.max_life = 1
@@ -416,6 +414,37 @@ create_board_token :: proc(type: Board_Token_Type) -> Board_Token {
 	token.current_life = token.max_life
 
 	return token
+}
+
+create_and_place_token :: proc(type: Board_Token_Type, alliance: Alliance) {
+	token := create_board_token(type)
+	if pos, pos_ok := get_random_board_pos_for_token(token, alliance); pos_ok {
+		token_replace, _ := get_token_from_board_pos(pos)
+		token_replace^ = token
+	}
+}
+
+get_random_board_pos_for_token :: proc(token: Board_Token, alliance: Alliance) -> (Board_Pos, bool) {
+	free_spots: sa.Small_Array(BOARD_COLUMNS * BOARD_ROWS, Board_Pos)
+	for x in 0..<BOARD_COLUMNS {
+		for y in 0..<BOARD_ROWS {
+			if y == BACK_ROW && !token.backliner do continue
+
+			pos := Board_Pos{x, y, alliance}
+			if test_token, ok := get_token_from_board_pos(pos); ok {
+				if test_token.type == .None {
+					sa.append(&free_spots, pos)
+				}
+			}
+		}
+	}
+
+	if sa.len(free_spots) == 0 {
+		return {}, false
+	}
+
+	rnd := rl.GetRandomValue(0, i32(sa.len(free_spots)-1))
+	return sa.get(free_spots, int(rnd)), true
 }
 
 // get board token from given position
@@ -566,7 +595,11 @@ start_round :: proc() {
 	// setup wave
 	level := sa.get_ptr(&g.levels, g.current_level)
 	wave := sa.get_ptr(&level.waves, g.current_wave)
-	g.enemy_rows = wave.enemy_rows
+	/* g.enemy_rows = wave.enemy_rows */
+	for enemy_type in sa.slice(&wave.enemies) {
+		create_and_place_token(enemy_type, .Enemy)
+	}
+
 
 	g.player.food += PLAYER_ROUND_FOOD
 	g.player.food = min(PLAYER_MAX_FOOD, g.player.food)
@@ -1059,7 +1092,7 @@ resolve_damage :: proc(state: ^Resolve_Damage_State) {
 									arrow: Arrow_VFX
 									arrow.t = 0
 									arrow.start = get_board_pos_screen_pos({x, y, .Player}) + ({BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2)
-									arrow.target = {(BOARD_COLUMNS/2) * BOARD_TILE_SIZE, 0}
+									arrow.target = {arrow.start.x, 0}
 									vfx: VFX
 									vfx.done = false
 									vfx.start_time = rl.GetTime()
@@ -1077,7 +1110,7 @@ resolve_damage :: proc(state: ^Resolve_Damage_State) {
 									arrow: Arrow_VFX
 									arrow.t = 0
 									arrow.start = get_board_pos_screen_pos({x, y, .Enemy}) + ({BOARD_TILE_SIZE, BOARD_TILE_SIZE}/2)
-									arrow.target = {(BOARD_COLUMNS/2) * BOARD_TILE_SIZE, BOARD_ROWS * 2 * BOARD_TILE_SIZE}
+									arrow.target = {arrow.start.x, BOARD_ROWS * 2 * BOARD_TILE_SIZE}
 									vfx: VFX
 									vfx.done = false
 									vfx.start_time = rl.GetTime()
@@ -1708,41 +1741,48 @@ game_init :: proc() {
 	sa.append(&g.levels, Level{})
 	level := sa.get_ptr(&g.levels, 0)
 
-	/* first_wave: Wave */
-	/* first_wave.enemy_rows[1][FRONT_ROW] = create_board_token(.Swordsman, .Enemy) */
-	/* first_wave.enemy_rows[2][FRONT_ROW] = create_board_token(.Healer, .Enemy) */
-	/* sa.append(&level.waves, first_wave) */
 
 
-	for _ in 0..<MAX_WAVES-1 {
+	{
 		wave: Wave
-
-		wave_amount := rl.GetRandomValue(3, 6)
-		fmt.println("WAVE AMOUNT", wave_amount)
-		for _ in 0..<wave_amount {
-			token_type := Board_Token_Type(rl.GetRandomValue(1, len(Board_Token_Type)-1))
-			token := create_board_token(token_type)
-
-			for {
-				y := int(rl.GetRandomValue(0, 1))
-				x := int(rl.GetRandomValue(0, BOARD_COLUMNS-1))
-				if y== 1 && !token.backliner do continue
-
-				
-				wave.enemy_rows[x][y] = token
-				break
-			}
-		}
-
-		/* for _ in 0..<4 { */
-		/* 	y := int(rl.GetRandomValue(0, 1)) */
-		/* 	x := int(rl.GetRandomValue(0, BOARD_COLUMNS-1)) */
-		/* 	token := create_board_token(.Archer, .Enemy) */
-		/* 	wave.enemy_rows[x][y] = token */
-		/* } */
+		sa.append(&wave.enemies, Board_Token_Type.Swordsman)
+		sa.append(&wave.enemies, Board_Token_Type.Swordsman)
+		sa.append(&wave.enemies, Board_Token_Type.Swordsman)
 		sa.append(&level.waves, wave)
 	}
-	/* sa.append(&g.levels, level) */
+	{
+		wave: Wave
+		sa.append(&wave.enemies, Board_Token_Type.Archer)
+		sa.append(&wave.enemies, Board_Token_Type.Archer)
+		sa.append(&wave.enemies, Board_Token_Type.Archer)
+		sa.append(&level.waves, wave)
+	}
+	{
+		wave: Wave
+		sa.append(&wave.enemies, Board_Token_Type.Healer)
+		sa.append(&wave.enemies, Board_Token_Type.Swordsman)
+		sa.append(&wave.enemies, Board_Token_Type.Bannerman)
+		sa.append(&level.waves, wave)
+	}
+	{
+		wave: Wave
+		sa.append(&wave.enemies, Board_Token_Type.Archer)
+		sa.append(&wave.enemies, Board_Token_Type.Archer)
+		sa.append(&wave.enemies, Board_Token_Type.Swordsman)
+		sa.append(&wave.enemies, Board_Token_Type.Healer)
+		sa.append(&level.waves, wave)
+	}
+	{
+		wave: Wave
+		sa.append(&wave.enemies, Board_Token_Type.Bannerman)
+		sa.append(&wave.enemies, Board_Token_Type.Spearman)
+		sa.append(&wave.enemies, Board_Token_Type.Spearman)
+		sa.append(&wave.enemies, Board_Token_Type.Spearman)
+		sa.append(&wave.enemies, Board_Token_Type.Archer)
+		sa.append(&wave.enemies, Board_Token_Type.Archer)
+		sa.append(&level.waves, wave)
+	}
+
 	g.current_level = 0
 	g.current_wave = 0
 
