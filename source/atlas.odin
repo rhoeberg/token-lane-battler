@@ -27,17 +27,18 @@ LETTERS_IN_FONT :: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz12345678
 
 // A generated square in the atlas you can use with rl.SetShapesTexture to make
 // raylib shapes such as rl.DrawRectangleRec() use the atlas.
-SHAPES_TEXTURE_RECT :: Rect {190, 0, 10, 10}
+SHAPES_TEXTURE_RECT :: Rect {221, 0, 10, 10}
 
 Texture_Name :: enum {
 	None,
 	Archer,
-	Test_Face,
-	Rats,
 	Cleaver,
 	Healer,
+	Rats,
+	Test_Face,
 	Bannerman,
 	Spearman,
+	Slug,
 }
 
 Atlas_Texture :: struct {
@@ -57,13 +58,14 @@ Atlas_Texture :: struct {
 
 atlas_textures: [Texture_Name]Atlas_Texture = {
 	.None = {},
-	.Archer = { rect = {33, 0, 32, 32}, offset_top = 0, offset_right = 0, offset_bottom = 0, offset_left = 0, document_size = {32, 32}, duration = 0.100},
+	.Archer = { rect = {0, 0, 32, 32}, offset_top = 0, offset_right = 0, offset_bottom = 0, offset_left = 0, document_size = {32, 32}, duration = 0.100},
+	.Cleaver = { rect = {33, 0, 32, 32}, offset_top = 0, offset_right = 0, offset_bottom = 0, offset_left = 0, document_size = {32, 32}, duration = 0.100},
+	.Healer = { rect = {129, 0, 24, 30}, offset_top = 1, offset_right = 4, offset_bottom = 1, offset_left = 4, document_size = {32, 32}, duration = 0.100},
+	.Rats = { rect = {167, 0, 26, 27}, offset_top = 5, offset_right = 0, offset_bottom = 0, offset_left = 6, document_size = {32, 32}, duration = 0.100},
 	.Test_Face = { rect = {66, 0, 31, 32}, offset_top = 0, offset_right = 1, offset_bottom = 0, offset_left = 0, document_size = {32, 32}, duration = 0.100},
-	.Rats = { rect = {136, 0, 26, 27}, offset_top = 5, offset_right = 0, offset_bottom = 0, offset_left = 6, document_size = {32, 32}, duration = 0.100},
-	.Cleaver = { rect = {0, 0, 32, 32}, offset_top = 0, offset_right = 0, offset_bottom = 0, offset_left = 0, document_size = {32, 32}, duration = 0.100},
-	.Healer = { rect = {98, 0, 24, 30}, offset_top = 1, offset_right = 4, offset_bottom = 1, offset_left = 4, document_size = {32, 32}, duration = 0.100},
-	.Bannerman = { rect = {163, 0, 26, 24}, offset_top = 8, offset_right = 1, offset_bottom = 0, offset_left = 5, document_size = {32, 32}, duration = 0.100},
-	.Spearman = { rect = {123, 0, 12, 30}, offset_top = 2, offset_right = 10, offset_bottom = 0, offset_left = 10, document_size = {32, 32}, duration = 0.100},
+	.Bannerman = { rect = {194, 0, 26, 24}, offset_top = 8, offset_right = 1, offset_bottom = 0, offset_left = 5, document_size = {32, 32}, duration = 0.100},
+	.Spearman = { rect = {154, 0, 12, 30}, offset_top = 2, offset_right = 10, offset_bottom = 0, offset_left = 10, document_size = {32, 32}, duration = 0.100},
+	.Slug = { rect = {98, 0, 30, 30}, offset_top = 2, offset_right = 0, offset_bottom = 0, offset_left = 2, document_size = {32, 32}, duration = 0.100},
 }
 
 Animation_Name :: enum {
